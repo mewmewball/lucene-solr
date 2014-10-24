@@ -1989,10 +1989,12 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
     if (rsp.getToLog().size() > 0) {
       if (log.isInfoEnabled()) {
         log.info(rsp.getToLogAsString(logid));
-      } else if (log.isWarnEnabled()) {
+      }
+
+      if (log.isWarnEnabled()) {
         final int qtime = (int)(rsp.getEndTime() - req.getStartTime());
         if (qtime >= slowQueryThresholdMillis) {
-          log.warn(rsp.getToLogAsString(logid));
+          log.warn("slow: " + rsp.getToLogAsString(logid));
         }
       }
     }

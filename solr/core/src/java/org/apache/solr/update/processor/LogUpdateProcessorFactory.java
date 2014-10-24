@@ -186,10 +186,12 @@ class LogUpdateProcessor extends UpdateRequestProcessor {
 
     if (log.isInfoEnabled()) {
       log.info(getLogStringAndClearRspToLog());
-    } else if (log.isWarnEnabled()) {
+    }
+
+    if (log.isWarnEnabled()) {
       long elapsed = rsp.getEndTime() - req.getStartTime();
       if (elapsed >= slowUpdateThresholdMillis) {
-        log.warn(getLogStringAndClearRspToLog());
+        log.warn("slow: " + getLogStringAndClearRspToLog());
       }
     }
   }
