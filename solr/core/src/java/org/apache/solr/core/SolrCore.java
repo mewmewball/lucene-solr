@@ -666,7 +666,7 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
     this.solrConfig = null;
     this.startTime = System.currentTimeMillis();
     this.maxWarmingSearchers = 2;  // we don't have a config yet, just pick a number.
-    this.slowQueryThresholdMillis = 1000;
+    this.slowQueryThresholdMillis = -1;
     this.resourceLoader = null;
     this.updateHandler = null;
     this.isReloaded = true;
@@ -1993,7 +1993,7 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
 
       if (log.isWarnEnabled()) {
         final int qtime = (int)(rsp.getEndTime() - req.getStartTime());
-        if (qtime >= slowQueryThresholdMillis) {
+        if (slowQueryThresholdMillis >= 0 && qtime >= slowQueryThresholdMillis) {
           log.warn("slow: " + rsp.getToLogAsString(logid));
         }
       }
