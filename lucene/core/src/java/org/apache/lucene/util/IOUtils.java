@@ -37,6 +37,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -44,14 +45,6 @@ import java.util.Map;
  * Remove once Lucene is on Java 7.
  * @lucene.internal */
 public final class IOUtils {
-  
-  /**
-   * UTF-8 {@link Charset} instance to prevent repeated
-   * {@link Charset#forName(String)} lookups
-   * @deprecated Use {@link StandardCharsets#UTF_8} instead.
-   */
-  @Deprecated
-  public static final Charset CHARSET_UTF_8 = StandardCharsets.UTF_8;
   
   /**
    * UTF-8 charset string.
@@ -215,7 +208,7 @@ public final class IOUtils {
    * <p>
    * Some of the files may be null, if so they are ignored.
    */
-  public static void deleteFilesIgnoringExceptions(Iterable<? extends Path> files) {
+  public static void deleteFilesIgnoringExceptions(Collection<? extends Path> files) {
     for (Path name : files) {
       if (name != null) {
         try {
@@ -249,7 +242,7 @@ public final class IOUtils {
    * 
    * @param files files to delete
    */
-  public static void deleteFilesIfExist(Iterable<? extends Path> files) throws IOException {
+  public static void deleteFilesIfExist(Collection<? extends Path> files) throws IOException {
     Throwable th = null;
 
     for (Path file : files) {

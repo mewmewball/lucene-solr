@@ -22,21 +22,19 @@ import java.io.IOException;
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
 import org.apache.lucene.document.Field.Store;
+import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.IntField;
 import org.apache.lucene.index.BaseStoredFieldsFormatTestCase;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.MockDirectoryWrapper;
 import org.junit.Test;
-
-import com.carrotsearch.randomizedtesting.annotations.Repeat;
 import com.carrotsearch.randomizedtesting.generators.RandomInts;
 
-@Repeat(iterations=5) // give it a chance to test various compression modes with different chunk sizes
 public class TestCompressingStoredFieldsFormat extends BaseStoredFieldsFormatTestCase {
 
   @Override
@@ -86,15 +84,7 @@ public class TestCompressingStoredFieldsFormat extends BaseStoredFieldsFormatTes
       iw.commit();
     }
     finally {
-      int counter = 0;
-      for (String fileName : dir.listAll()) {
-        if (fileName.endsWith(".fdt") || fileName.endsWith(".fdx")) {
-          counter++;
-        }
-      }
-      // Only one .fdt and one .fdx files must have been found
-      assertEquals(2, counter);
-      iw.close();
+      // Abort should have closed the deleter:
       dir.close();
     }
   }

@@ -129,6 +129,10 @@ public abstract class MergePolicy {
       totalDocCount = count;
     }
 
+    /** Called by {@link IndexWriter} after the merge is done and all readers have been closed. */
+    public void mergeFinished() throws IOException {
+    }
+
     /** Expert: Get the list of readers to merge. Note that this list does not
      *  necessarily match the list of segments to merge and should only be used
      *  to feed SegmentMerger to initialize a merge. When a {@link OneMerge}
@@ -205,8 +209,8 @@ public abstract class MergePolicy {
       while (paused) {
         try {
           // In theory we could wait() indefinitely, but we
-          // do 1000 msec, defensively
-          wait(1000);
+          // do 250 msec, defensively
+          wait(250);
         } catch (InterruptedException ie) {
           throw new RuntimeException(ie);
         }
@@ -416,7 +420,7 @@ public abstract class MergePolicy {
 
   /**
    * Determine what set of merge operations is necessary in
-   * order to merge to <= the specified segment count. {@link IndexWriter} calls this when its
+   * order to merge to {@code <=} the specified segment count. {@link IndexWriter} calls this when its
    * {@link IndexWriter#forceMerge} method is called. This call is always
    * synchronized on the {@link IndexWriter} instance so only one thread at a
    * time will call this method.

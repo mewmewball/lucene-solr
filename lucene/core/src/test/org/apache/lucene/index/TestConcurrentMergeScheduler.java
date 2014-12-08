@@ -29,6 +29,7 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
+import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.util.LuceneTestCase;
@@ -81,14 +82,23 @@ public class TestConcurrentMergeScheduler extends LuceneTestCase {
     MockDirectoryWrapper directory = newMockDirectory();
     FailOnlyOnFlush failure = new FailOnlyOnFlush();
     directory.failOn(failure);
-
-    IndexWriter writer = new IndexWriter(directory, newIndexWriterConfig(new MockAnalyzer(random()))
-                                                      .setMaxBufferedDocs(2));
+    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()))
+      .setMaxBufferedDocs(2);
+    if (iwc.getMergeScheduler() instanceof ConcurrentMergeScheduler) {
+      iwc.setMergeScheduler(new SuppressingConcurrentMergeScheduler() {
+          @Override
+          protected boolean isOK(Throwable th) {
+            return th instanceof AlreadyClosedException ||
+              (th instanceof IllegalStateException && th.getMessage().contains("this writer hit an unrecoverable error"));
+          }
+        });
+    }
+    IndexWriter writer = new IndexWriter(directory, iwc);
     Document doc = new Document();
     Field idField = newStringField("id", "", Field.Store.YES);
     doc.add(idField);
-    int extraCount = 0;
 
+    outer:
     for(int i=0;i<10;i++) {
       if (VERBOSE) {
         System.out.println("TEST: iter=" + i);
@@ -110,22 +120,20 @@ public class TestConcurrentMergeScheduler extends LuceneTestCase {
           if (failure.hitExc) {
             fail("failed to hit IOException");
           }
-          extraCount++;
         } catch (IOException ioe) {
           if (VERBOSE) {
             ioe.printStackTrace(System.out);
           }
           failure.clearDoFail();
-          break;
+          assertTrue(writer.isClosed());
+          // Abort should have closed the deleter:
+          assertTrue(writer.deleter.isClosed());
+          break outer;
         }
       }
-      assertEquals(20*(i+1)+extraCount, writer.numDocs());
     }
 
-    writer.close();
-    IndexReader reader = DirectoryReader.open(directory);
-    assertEquals(200+extraCount, reader.numDocs());
-    reader.close();
+    assertFalse(DirectoryReader.indexExists(directory));
     directory.close();
   }
 
@@ -222,7 +230,8 @@ public class TestConcurrentMergeScheduler extends LuceneTestCase {
             setCommitOnClose(false)
     );
 
-    for(int iter=0;iter<10;iter++) {
+    int numIters = TEST_NIGHTLY ? 10 : 3;
+    for(int iter=0;iter<numIters;iter++) {
 
       for(int j=0;j<201;j++) {
         idField.setStringValue(Integer.toString(iter*201+j));
@@ -339,7 +348,6 @@ public class TestConcurrentMergeScheduler extends LuceneTestCase {
     dir.close();
   }
 
-
   private static class TrackingCMS extends ConcurrentMergeScheduler {
     long totMergedBytes;
     CountDownLatch atLeastOneMerge;
@@ -453,5 +461,93 @@ public class TestConcurrentMergeScheduler extends LuceneTestCase {
 
     w.close();
     d.close();
+  }
+
+  // LUCENE-6063
+  public void testMaybeStallCalled() throws Exception {
+    final AtomicBoolean wasCalled = new AtomicBoolean();
+    Directory dir = newDirectory();
+    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()));
+    iwc.setMergeScheduler(new ConcurrentMergeScheduler() {
+        @Override
+        protected void maybeStall() {
+          wasCalled.set(true);
+        }
+      });
+    IndexWriter w = new IndexWriter(dir, iwc);
+    w.addDocument(new Document());
+    w.forceMerge(1);
+    assertTrue(wasCalled.get());
+
+    w.close();
+    dir.close();
+  }
+
+  // LUCENE-6094
+  public void testHangDuringRollback() throws Throwable {
+    Directory dir = newMockDirectory();
+    IndexWriterConfig iwc = new IndexWriterConfig(new MockAnalyzer(random()));
+    iwc.setMaxBufferedDocs(2);
+    LogDocMergePolicy mp = new LogDocMergePolicy();
+    iwc.setMergePolicy(mp);
+    mp.setMergeFactor(2);
+    final CountDownLatch mergeStart = new CountDownLatch(1);
+    final CountDownLatch mergeFinish = new CountDownLatch(1);
+    ConcurrentMergeScheduler cms = new ConcurrentMergeScheduler() {
+        @Override
+        protected void doMerge(MergePolicy.OneMerge merge) throws IOException {
+          mergeStart.countDown();
+          try {
+            mergeFinish.await();
+          } catch (InterruptedException ie) {
+            throw new RuntimeException(ie);
+          }
+          super.doMerge(merge);
+        }
+      };
+    cms.setMaxMergesAndThreads(1, 1);
+    iwc.setMergeScheduler(cms);
+
+    final IndexWriter w = new IndexWriter(dir, iwc);
+    
+    w.addDocument(new Document());
+    w.addDocument(new Document());
+    // flush
+
+    w.addDocument(new Document());
+    w.addDocument(new Document());
+    // flush + merge
+
+    // Wait for merge to kick off
+    mergeStart.await();
+
+    new Thread() {
+      @Override
+      public void run() {
+        try {
+          w.addDocument(new Document());
+          w.addDocument(new Document());
+          // flush
+
+          w.addDocument(new Document());
+          // W/o the fix for LUCENE-6094 we would hang forever here:
+          w.addDocument(new Document());
+          // flush + merge
+          
+          // Now allow first merge to finish:
+          mergeFinish.countDown();
+
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
+      }
+    }.start();
+
+    while (w.numDocs() != 8) {
+      Thread.sleep(10);
+    }
+
+    w.rollback();
+    dir.close();
   }
 }

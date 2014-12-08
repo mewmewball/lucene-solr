@@ -356,7 +356,7 @@ public class CollectionsAPIDistributedZkTest extends AbstractFullDistribZkTestBa
     assertTrue(response.isSuccess());
     coresStatus = response.getCollectionCoresStatus();
     assertEquals(0, (int) coresStatus.get("conf1_shard1_0_replica1").get("status"));
-    assertEquals(0, (int) coresStatus.get("conf1_shard1_0_replica1").get("status"));
+    assertEquals(0, (int) coresStatus.get("conf1_shard1_1_replica1").get("status"));
 
     deleteCollectionRequest = new CollectionAdminRequest.Delete();
     deleteCollectionRequest.setCollectionName("conf1");
@@ -1032,25 +1032,18 @@ public class CollectionsAPIDistributedZkTest extends AbstractFullDistribZkTestBa
               client = createCloudClient(null);
             } else if (i == 1) {
               client = createCloudClient(collectionName);
+            } else  {
+              client = createCloudClient(null);
             }
             
             createCollection(collectionInfos, collectionName,
                 numShards, replicationFactor, maxShardsPerNode, client, null,
                 "conf1");
-            
+
             // remove collection
-            ModifiableSolrParams params = new ModifiableSolrParams();
-            params.set("action", CollectionAction.DELETE.toString());
-            params.set("name", collectionName);
-            QueryRequest request = new QueryRequest(params);
-            request.setPath("/admin/collections");
-            
-            if (client == null) {
-              client = createCloudClient(null);
-            }
-            
-            client.request(request);
-            
+            CollectionAdminRequest.Delete delete = new CollectionAdminRequest.Delete();
+            delete.setCollectionName(collectionName);
+            client.request(delete);
           } catch (SolrServerException e) {
             e.printStackTrace();
             throw new RuntimeException(e);

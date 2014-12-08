@@ -64,6 +64,7 @@ import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.TopScoreDocCollector;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.BitSetIterator;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
@@ -237,12 +238,14 @@ public class TestJoinUtil extends LuceneTestCase {
     doc.add(new TextField("description", "random text", Field.Store.NO));
     doc.add(new TextField("name", "name1", Field.Store.NO));
     doc.add(new TextField(idField, "7", Field.Store.NO));
+    doc.add(new SortedDocValuesField(idField, new BytesRef("7")));
     w.addDocument(doc);
 
     // 1
     doc = new Document();
     doc.add(new TextField("price", "10.0", Field.Store.NO));
     doc.add(new TextField(idField, "2", Field.Store.NO));
+    doc.add(new SortedDocValuesField(idField, new BytesRef("2")));
     doc.add(new TextField(toField, "7", Field.Store.NO));
     w.addDocument(doc);
 
@@ -250,6 +253,7 @@ public class TestJoinUtil extends LuceneTestCase {
     doc = new Document();
     doc.add(new TextField("price", "20.0", Field.Store.NO));
     doc.add(new TextField(idField, "3", Field.Store.NO));
+    doc.add(new SortedDocValuesField(idField, new BytesRef("3")));
     doc.add(new TextField(toField, "7", Field.Store.NO));
     w.addDocument(doc);
 
@@ -265,6 +269,7 @@ public class TestJoinUtil extends LuceneTestCase {
     doc = new Document();
     doc.add(new TextField("price", "10.0", Field.Store.NO));
     doc.add(new TextField(idField, "5", Field.Store.NO));
+    doc.add(new SortedDocValuesField(idField, new BytesRef("5")));
     doc.add(new TextField(toField, "0", Field.Store.NO));
     w.addDocument(doc);
 
@@ -272,6 +277,7 @@ public class TestJoinUtil extends LuceneTestCase {
     doc = new Document();
     doc.add(new TextField("price", "20.0", Field.Store.NO));
     doc.add(new TextField(idField, "6", Field.Store.NO));
+    doc.add(new SortedDocValuesField(idField, new BytesRef("6")));
     doc.add(new TextField(toField, "0", Field.Store.NO));
     w.addDocument(doc);
 
@@ -452,7 +458,7 @@ public class TestJoinUtil extends LuceneTestCase {
         int r = random().nextInt(context.randomUniqueValues.length);
         boolean from = context.randomFrom[r];
         String randomValue = context.randomUniqueValues[r];
-        FixedBitSet expectedResult = createExpectedResult(randomValue, from, indexSearcher.getIndexReader(), context);
+        BitSet expectedResult = createExpectedResult(randomValue, from, indexSearcher.getIndexReader(), context);
 
         final Query actualQuery = new TermQuery(new Term("value", randomValue));
         if (VERBOSE) {
@@ -474,7 +480,7 @@ public class TestJoinUtil extends LuceneTestCase {
         }
 
         // Need to know all documents that have matches. TopDocs doesn't give me that and then I'd be also testing TopDocsCollector...
-        final FixedBitSet actualResult = new FixedBitSet(indexSearcher.getIndexReader().maxDoc());
+        final BitSet actualResult = new FixedBitSet(indexSearcher.getIndexReader().maxDoc());
         final TopScoreDocCollector topScoreDocCollector = TopScoreDocCollector.create(10, false);
         indexSearcher.search(joinQuery, new SimpleCollector() {
 
@@ -859,7 +865,7 @@ public class TestJoinUtil extends LuceneTestCase {
     return new TopDocs(hits.size(), scoreDocs, hits.isEmpty() ? Float.NaN : hits.get(0).getValue().score(scoreMode));
   }
 
-  private FixedBitSet createExpectedResult(String queryValue, boolean from, IndexReader topLevelReader, IndexIterationContext context) throws IOException {
+  private BitSet createExpectedResult(String queryValue, boolean from, IndexReader topLevelReader, IndexIterationContext context) throws IOException {
     final Map<String, List<RandomDoc>> randomValueDocs;
     final Map<String, List<RandomDoc>> linkValueDocuments;
     if (from) {
@@ -870,7 +876,7 @@ public class TestJoinUtil extends LuceneTestCase {
       linkValueDocuments = context.fromDocuments;
     }
 
-    FixedBitSet expectedResult = new FixedBitSet(topLevelReader.maxDoc());
+    BitSet expectedResult = new FixedBitSet(topLevelReader.maxDoc());
     List<RandomDoc> matchingDocs = randomValueDocs.get(queryValue);
     if (matchingDocs == null) {
       return new FixedBitSet(topLevelReader.maxDoc());

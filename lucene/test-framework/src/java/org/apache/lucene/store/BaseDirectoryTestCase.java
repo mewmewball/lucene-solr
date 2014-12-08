@@ -406,7 +406,7 @@ public abstract class BaseDirectoryTestCase extends LuceneTestCase {
       
       @Override
       public void run() {
-        for (int i = 0; i < 3000; i++) {
+        for (int i = 0; i < 1000; i++) {
           String fileName = this.name + i;
           try {
             //System.out.println("create:" + fileName);
@@ -1029,6 +1029,15 @@ public abstract class BaseDirectoryTestCase extends LuceneTestCase {
     } finally {
       os.close();
     }
+    dir.close();
+  }
+
+  // LUCENE-6084
+  public void testIndexOutputToString() throws Throwable {
+    Directory dir = getDirectory(createTempDir());
+    IndexOutput out = dir.createOutput("camelCase.txt", newIOContext(random()));
+    assertTrue(out.toString(), out.toString().contains("camelCase.txt"));
+    out.close();
     dir.close();
   }
 }

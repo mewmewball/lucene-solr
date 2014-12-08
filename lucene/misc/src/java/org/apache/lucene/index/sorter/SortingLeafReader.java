@@ -25,7 +25,7 @@ import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.DocsAndPositionsEnum;
 import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.NumericDocValues;
@@ -746,7 +746,7 @@ public class SortingLeafReader extends FilterLeafReader {
   /** Expert: same as {@link #wrap(org.apache.lucene.index.LeafReader, Sort)} but operates directly on a {@link Sorter.DocMap}. */
   static LeafReader wrap(LeafReader reader, Sorter.DocMap docMap) {
     if (docMap == null) {
-      // the reader is already sorter
+      // the reader is already sorted
       return reader;
     }
     if (reader.maxDoc() != docMap.size()) {
@@ -770,12 +770,7 @@ public class SortingLeafReader extends FilterLeafReader {
   
   @Override
   public Fields fields() throws IOException {
-    Fields fields = in.fields();
-    if (fields == null) {
-      return null;
-    } else {
-      return new SortingFields(fields, in.getFieldInfos(), docMap);
-    }
+    return new SortingFields(in.fields(), in.getFieldInfos(), docMap);
   }
   
   @Override

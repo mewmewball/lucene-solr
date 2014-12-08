@@ -19,7 +19,6 @@ package org.apache.lucene.util;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.DataOutput;
@@ -135,11 +134,6 @@ public final class PagedBytes implements Accountable {
       }
       return size;
     }
-    
-    @Override
-    public Iterable<? extends Accountable> getChildResources() {
-      return Collections.emptyList();
-    }
 
     @Override
     public String toString() {
@@ -192,7 +186,7 @@ public final class PagedBytes implements Accountable {
 
   /** Copy BytesRef in, setting BytesRef out to the result.
    * Do not use this if you will use freeze(true).
-   * This only supports bytes.length <= blockSize */
+   * This only supports bytes.length &lt;= blockSize */
   public void copy(BytesRef bytes, BytesRef out) {
     int left = blockSize - upto;
     if (bytes.length > left || currentBlock==null) {
@@ -256,11 +250,6 @@ public final class PagedBytes implements Accountable {
       size += RamUsageEstimator.sizeOf(currentBlock);
     }
     return size;
-  }
-  
-  @Override
-  public Iterable<? extends Accountable> getChildResources() {
-    return Collections.emptyList();
   }
 
   /** Copy bytes in, writing the length as a 1 or 2 byte

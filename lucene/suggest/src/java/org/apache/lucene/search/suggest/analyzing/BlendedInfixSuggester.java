@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -29,17 +30,17 @@ import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.MultiDocValues;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.suggest.Lookup;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.Version;
 
 // TODO:
 // - allow to use the search score
@@ -95,15 +96,7 @@ public class BlendedInfixSuggester extends AnalyzingInfixSuggester {
    * directory, if it exists.
    */
   public BlendedInfixSuggester(Directory dir, Analyzer analyzer) throws IOException {
-    this(analyzer.getVersion(), dir, analyzer);
-  }
-
-  /**
-   * @deprecated Use {@link #BlendedInfixSuggester(Directory, Analyzer)}
-   */
-  @Deprecated
-  public BlendedInfixSuggester(Version matchVersion, Directory dir, Analyzer analyzer) throws IOException {
-    super(matchVersion, dir, analyzer);
+    super(dir, analyzer);
     this.blenderType = BlenderType.POSITION_LINEAR;
     this.numFactor = DEFAULT_NUM_FACTOR;
   }
@@ -120,16 +113,7 @@ public class BlendedInfixSuggester extends AnalyzingInfixSuggester {
    */
   public BlendedInfixSuggester(Directory dir, Analyzer indexAnalyzer, Analyzer queryAnalyzer,
                                int minPrefixChars, BlenderType blenderType, int numFactor, boolean commitOnBuild) throws IOException {
-    this(indexAnalyzer.getVersion(), dir, indexAnalyzer, queryAnalyzer, minPrefixChars, blenderType, numFactor, commitOnBuild);
-  }
-
-  /**
-   * @deprecated Use {@link #BlendedInfixSuggester(Directory, Analyzer, Analyzer, int, BlendedInfixSuggester.BlenderType, int, boolean)}
-   */
-  @Deprecated
-  public BlendedInfixSuggester(Version matchVersion, Directory dir, Analyzer indexAnalyzer, Analyzer queryAnalyzer,
-                               int minPrefixChars, BlenderType blenderType, int numFactor, boolean commitOnBuild) throws IOException {
-    super(matchVersion, dir, indexAnalyzer, queryAnalyzer, minPrefixChars, commitOnBuild);
+    super(dir, indexAnalyzer, queryAnalyzer, minPrefixChars, commitOnBuild);
     this.blenderType = blenderType;
     this.numFactor = numFactor;
   }
@@ -147,9 +131,15 @@ public class BlendedInfixSuggester extends AnalyzingInfixSuggester {
   }
 
   @Override
+  public List<Lookup.LookupResult> lookup(CharSequence key, Map<BytesRef, BooleanClause.Occur> contextInfo, int num, boolean allTermsRequired, boolean doHighlight) throws IOException {
+    // here we multiply the number of searched element by the defined factor
+    return super.lookup(key, contextInfo, num * numFactor, allTermsRequired, doHighlight);
+  }
+
+  @Override
   protected FieldType getTextFieldType() {
     FieldType ft = new FieldType(TextField.TYPE_NOT_STORED);
-    ft.setIndexOptions(FieldInfo.IndexOptions.DOCS_AND_FREQS_AND_POSITIONS);
+    ft.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS);
     ft.setStoreTermVectors(true);
     ft.setStoreTermVectorPositions(true);
     ft.setOmitNorms(true);
@@ -199,8 +189,7 @@ public class BlendedInfixSuggester extends AnalyzingInfixSuggester {
 
       LookupResult result;
       if (doHighlight) {
-        Object highlightKey = highlight(text, matchedTokens, prefixToken);
-        result = new LookupResult(highlightKey.toString(), highlightKey, score, payload);
+        result = new LookupResult(text, highlight(text, matchedTokens, prefixToken), score, payload);
       } else {
         result = new LookupResult(text, score, payload);
       }

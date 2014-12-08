@@ -19,11 +19,11 @@ package org.apache.lucene.index;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Collection;
-import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.lucene.util.Bits;
@@ -62,9 +62,6 @@ public final class MultiFields extends Fields {
   public static Fields getFields(IndexReader reader) throws IOException {
     final List<LeafReaderContext> leaves = reader.leaves();
     switch (leaves.size()) {
-      case 0:
-        // no fields
-        return null;
       case 1:
         // already an atomic reader / reader with one leave
         return leaves.get(0).reader().fields();
@@ -74,14 +71,10 @@ public final class MultiFields extends Fields {
         for (final LeafReaderContext ctx : leaves) {
           final LeafReader r = ctx.reader();
           final Fields f = r.fields();
-          if (f != null) {
-            fields.add(f);
-            slices.add(new ReaderSlice(ctx.docBase, r.maxDoc(), fields.size()-1));
-          }
+          fields.add(f);
+          slices.add(new ReaderSlice(ctx.docBase, r.maxDoc(), fields.size()-1));
         }
-        if (fields.isEmpty()) {
-          return null;
-        } else if (fields.size() == 1) {
+        if (fields.size() == 1) {
           return fields.get(0);
         } else {
           return new MultiFields(fields.toArray(Fields.EMPTY_ARRAY),
@@ -124,22 +117,17 @@ public final class MultiFields extends Fields {
 
   /**  This method may return null if the field does not exist.*/
   public static Terms getTerms(IndexReader r, String field) throws IOException {
-    final Fields fields = getFields(r);
-    if (fields == null) {
-      return null;
-    } else {
-      return fields.terms(field);
-    }
+    return getFields(r).terms(field);
   }
   
-  /** Returns {@link DocsEnum} for the specified field &
+  /** Returns {@link DocsEnum} for the specified field and
    *  term.  This will return null if the field or term does
    *  not exist. */
   public static DocsEnum getTermDocsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term) throws IOException {
     return getTermDocsEnum(r, liveDocs, field, term, DocsEnum.FLAG_FREQS);
   }
   
-  /** Returns {@link DocsEnum} for the specified field &
+  /** Returns {@link DocsEnum} for the specified field and
    *  term, with control over whether freqs are required.
    *  Some codecs may be able to optimize their
    *  implementation when freqs are not required.  This will
@@ -159,7 +147,7 @@ public final class MultiFields extends Fields {
   }
 
   /** Returns {@link DocsAndPositionsEnum} for the specified
-   *  field & term.  This will return null if the field or
+   *  field and term.  This will return null if the field or
    *  term does not exist or positions were not indexed. 
    *  @see #getTermPositionsEnum(IndexReader, Bits, String, BytesRef, int) */
   public static DocsAndPositionsEnum getTermPositionsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term) throws IOException {
@@ -167,7 +155,7 @@ public final class MultiFields extends Fields {
   }
 
   /** Returns {@link DocsAndPositionsEnum} for the specified
-   *  field & term, with control over whether offsets and payloads are
+   *  field and term, with control over whether offsets and payloads are
    *  required.  Some codecs may be able to optimize
    *  their implementation when offsets and/or payloads are not
    *  required. This will return null if the field or term does not
@@ -271,7 +259,7 @@ public final class MultiFields extends Fields {
   public static Collection<String> getIndexedFields(IndexReader reader) {
     final Collection<String> fields = new HashSet<>();
     for(final FieldInfo fieldInfo : getMergedFieldInfos(reader)) {
-      if (fieldInfo.isIndexed()) {
+      if (fieldInfo.getIndexOptions() != IndexOptions.NONE) {
         fields.add(fieldInfo.name);
       }
     }

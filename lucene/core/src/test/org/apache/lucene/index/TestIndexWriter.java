@@ -54,7 +54,6 @@ import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.IndexSearcher;
@@ -67,14 +66,11 @@ import org.apache.lucene.store.BaseDirectoryWrapper;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexOutput;
-import org.apache.lucene.store.Lock;
-import org.apache.lucene.store.LockFactory;
 import org.apache.lucene.store.LockObtainFailedException;
 import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.store.NoLockFactory;
 import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.store.SimpleFSLockFactory;
-import org.apache.lucene.store.SingleInstanceLockFactory;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.Constants;
@@ -518,45 +514,6 @@ public class TestIndexWriter extends LuceneTestCase {
       dir.close();
     }
 
-    // Make sure that a Directory implementation that does
-    // not use LockFactory at all (ie overrides makeLock and
-    // implements its own private locking) works OK.  This
-    // was raised on java-dev as loss of backwards
-    // compatibility.
-    public void testNullLockFactory() throws IOException {
-
-      final class MyRAMDirectory extends MockDirectoryWrapper {
-        private LockFactory myLockFactory;
-        MyRAMDirectory(Directory delegate) {
-          super(random(), delegate);
-          lockFactory = null;
-          myLockFactory = new SingleInstanceLockFactory();
-        }
-        @Override
-        public Lock makeLock(String name) {
-          return myLockFactory.makeLock(name);
-        }
-      }
-
-      Directory dir = new MyRAMDirectory(new RAMDirectory());
-      IndexWriter writer = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random())));
-      for (int i = 0; i < 100; i++) {
-        addDoc(writer);
-      }
-      writer.close();
-      Term searchTerm = new Term("content", "aaa");
-      IndexReader reader = DirectoryReader.open(dir);
-      IndexSearcher searcher = newSearcher(reader);
-      ScoreDoc[] hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
-      assertEquals("did not get right number of hits", 100, hits.length);
-      reader.close();
-
-      writer = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random()))
-        .setOpenMode(OpenMode.CREATE));
-      writer.close();
-      dir.close();
-    }
-
     public void testFlushWithNoMerging() throws IOException {
       Directory dir = newDirectory();
       IndexWriter writer = new IndexWriter(
@@ -949,6 +906,15 @@ public class TestIndexWriter extends LuceneTestCase {
       // LUCENE-2239: won't work with NIOFS/MMAP
       adder = new MockDirectoryWrapper(random, new RAMDirectory());
       IndexWriterConfig conf = newIndexWriterConfig(random, new MockAnalyzer(random));
+      if (conf.getMergeScheduler() instanceof ConcurrentMergeScheduler) {
+        conf.setMergeScheduler(new SuppressingConcurrentMergeScheduler() {
+            @Override
+            protected boolean isOK(Throwable th) {
+              return th instanceof AlreadyClosedException ||
+                (th instanceof IllegalStateException && th.getMessage().contains("this writer hit an unrecoverable error"));
+            }
+          });
+      }
       IndexWriter w = new IndexWriter(adder, conf);
       Document doc = new Document();
       doc.add(newStringField(random, "id", "500", Field.Store.NO));
@@ -984,6 +950,12 @@ public class TestIndexWriter extends LuceneTestCase {
       // When interrupt arrives in w.close(), this can
       // lead to double-write of files:
       dir.setPreventDoubleWrite(false);
+      
+      // open/close slowly sometimes
+      dir.setUseSlowOpenClosers(true);
+      
+      // throttle a little
+      dir.setThrottling(MockDirectoryWrapper.Throttling.SOMETIMES);
 
       IndexWriter w = null;
       while(!finish) {
@@ -1006,6 +978,15 @@ public class TestIndexWriter extends LuceneTestCase {
             }
             IndexWriterConfig conf = newIndexWriterConfig(random,
                                                           new MockAnalyzer(random)).setMaxBufferedDocs(2);
+            if (conf.getMergeScheduler() instanceof ConcurrentMergeScheduler) {
+              conf.setMergeScheduler(new SuppressingConcurrentMergeScheduler() {
+                  @Override
+                  protected boolean isOK(Throwable th) {
+                    return th instanceof AlreadyClosedException ||
+                      (th instanceof IllegalStateException && th.getMessage().contains("this writer hit an unrecoverable error"));
+                  }
+                });
+            }
             //conf.setInfoStream(log);
             w = new IndexWriter(dir, conf);
 
@@ -1165,8 +1146,8 @@ public class TestIndexWriter extends LuceneTestCase {
     // init this class (in servicing a first interrupt):
     assertTrue(new ThreadInterruptedException(new InterruptedException()).getCause() instanceof InterruptedException);
 
-    // issue 300 interrupts to child thread
-    final int numInterrupts = atLeast(300);
+    // issue 100 interrupts to child thread
+    final int numInterrupts = atLeast(100);
     int i = 0;
     while(i < numInterrupts) {
       // TODO: would be nice to also sometimes interrupt the
@@ -1186,52 +1167,6 @@ public class TestIndexWriter extends LuceneTestCase {
       fail(new String(t.bytesLog.toString("UTF-8")));
     }
   }
-  
-  /** testThreadInterruptDeadlock but with 2 indexer threads */
-  public void testTwoThreadsInterruptDeadlock() throws Exception {
-    IndexerThreadInterrupt t1 = new IndexerThreadInterrupt(1);
-    t1.setDaemon(true);
-    t1.start();
-    
-    IndexerThreadInterrupt t2 = new IndexerThreadInterrupt(2);
-    t2.setDaemon(true);
-    t2.start();
-
-    // Force class loader to load ThreadInterruptedException
-    // up front... else we can see a false failure if 2nd
-    // interrupt arrives while class loader is trying to
-    // init this class (in servicing a first interrupt):
-    assertTrue(new ThreadInterruptedException(new InterruptedException()).getCause() instanceof InterruptedException);
-
-    // issue 300 interrupts to child thread
-    final int numInterrupts = atLeast(300);
-    int i = 0;
-    while(i < numInterrupts) {
-      // TODO: would be nice to also sometimes interrupt the
-      // CMS merge threads too ...
-      Thread.sleep(10);
-      IndexerThreadInterrupt t = random().nextBoolean() ? t1 : t2;
-      if (t.allowInterrupt) {
-        i++;
-        t.interrupt();
-      }
-      if (!t1.isAlive() && !t2.isAlive()) {
-        break;
-      }
-    }
-    t1.finish = true;
-    t2.finish = true;
-    t1.join();
-    t2.join();
-    if (t1.failed) {
-      System.out.println("Thread1 failed:\n" + new String(t1.bytesLog.toString("UTF-8")));
-    }
-    if (t2.failed) {
-      System.out.println("Thread2 failed:\n" + new String(t2.bytesLog.toString("UTF-8")));
-    }
-    assertFalse(t1.failed || t2.failed);
-  }
-
 
   public void testIndexStoreCombos() throws Exception {
     Directory dir = newDirectory();
@@ -1247,7 +1182,7 @@ public class TestIndexWriter extends LuceneTestCase {
     
     Field f = new Field("binary", b, 10, 17, customType);
     // TODO: this is evil, changing the type after creating the field:
-    customType.setIndexOptions(IndexOptions.DOCS_ONLY);
+    customType.setIndexOptions(IndexOptions.DOCS);
     final MockTokenizer doc1field1 = new MockTokenizer(MockTokenizer.WHITESPACE, false);
     doc1field1.setReader(new StringReader("doc1field1"));
     f.setTokenStream(doc1field1);
@@ -1466,7 +1401,7 @@ public class TestIndexWriter extends LuceneTestCase {
     // Tests that if FSDir is opened w/ a NoLockFactory (or SingleInstanceLF),
     // then IndexWriter ctor succeeds. Previously (LUCENE-2386) it failed
     // when listAll() was called in IndexFileDeleter.
-    Directory dir = newFSDirectory(createTempDir("emptyFSDirNoLock"), NoLockFactory.getNoLockFactory());
+    Directory dir = newFSDirectory(createTempDir("emptyFSDirNoLock"), NoLockFactory.INSTANCE);
     new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random()))).close();
     dir.close();
   }
@@ -1537,8 +1472,7 @@ public class TestIndexWriter extends LuceneTestCase {
   }
 
   public void testNoSegmentFile() throws IOException {
-    BaseDirectoryWrapper dir = newDirectory();
-    dir.setLockFactory(NoLockFactory.getNoLockFactory());
+    BaseDirectoryWrapper dir = newDirectory(random(), NoLockFactory.INSTANCE);
     IndexWriter w = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random()))
                                            .setMaxBufferedDocs(2));
 
@@ -1780,11 +1714,10 @@ public class TestIndexWriter extends LuceneTestCase {
   }
 
   public void testWhetherDeleteAllDeletesWriteLock() throws Exception {
-    Directory d = newFSDirectory(createTempDir("TestIndexWriter.testWhetherDeleteAllDeletesWriteLock"));
     // Must use SimpleFSLockFactory... NativeFSLockFactory
     // somehow "knows" a lock is held against write.lock
     // even if you remove that file:
-    d.setLockFactory(new SimpleFSLockFactory());
+    Directory d = newFSDirectory(createTempDir("TestIndexWriter.testWhetherDeleteAllDeletesWriteLock"), SimpleFSLockFactory.INSTANCE);
     RandomIndexWriter w1 = new RandomIndexWriter(random(), d);
     w1.deleteAll();
     try {
@@ -1807,7 +1740,7 @@ public class TestIndexWriter extends LuceneTestCase {
     docsAndFreqs.setIndexOptions(IndexOptions.DOCS_AND_FREQS);
 
     FieldType docsOnly = new FieldType(TextField.TYPE_NOT_STORED);
-    docsOnly.setIndexOptions(IndexOptions.DOCS_ONLY);
+    docsOnly.setIndexOptions(IndexOptions.DOCS);
 
     Document doc = new Document();
     doc.add(new Field("field", "a b c", docsAndFreqs));
@@ -2665,6 +2598,10 @@ public class TestIndexWriter extends LuceneTestCase {
     assumeFalse("this test can't run on Windows", Constants.WINDOWS);
 
     MockDirectoryWrapper dir = newMockDirectory();
+    if (TestUtil.isWindowsFS(dir)) {
+      dir.close();
+      assumeFalse("this test can't run on simulated windows (WindowsFS)", true);
+    }
     
     // don't act like windows either, or the test won't simulate the condition
     dir.setEnableVirusScanner(false);

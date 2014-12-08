@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 
 import org.apache.lucene.codecs.Codec;
@@ -309,28 +310,6 @@ public abstract class BaseCompoundFormatTestCase extends BaseIndexFileFormatTest
     Directory cfs = si.getCodec().compoundFormat().getCompoundReader(dir, si, IOContext.DEFAULT);
     try {
       cfs.makeLock("foobar");
-      fail("didn't get expected exception");
-    } catch (UnsupportedOperationException expected) {
-      // expected UOE
-    }
-    cfs.close();
-    dir.close();
-  }
-  
-  // test that cfs reader is read-only
-  public void testClearLockDisabled() throws IOException {
-    final String testfile = "_123.test";
-
-    Directory dir = newDirectory();
-    IndexOutput out = dir.createOutput(testfile, IOContext.DEFAULT);
-    out.writeInt(3);
-    out.close();
- 
-    SegmentInfo si = newSegmentInfo(dir, "_123");
-    si.getCodec().compoundFormat().write(dir, si, Collections.<String>emptyList(), MergeState.CheckAbort.NONE, IOContext.DEFAULT);
-    Directory cfs = si.getCodec().compoundFormat().getCompoundReader(dir, si, IOContext.DEFAULT);
-    try {
-      cfs.clearLock("foobar");
       fail("didn't get expected exception");
     } catch (UnsupportedOperationException expected) {
       // expected UOE
@@ -648,7 +627,7 @@ public abstract class BaseCompoundFormatTestCase extends BaseIndexFileFormatTest
   
   /** Returns a new fake segment */
   protected static SegmentInfo newSegmentInfo(Directory dir, String name) {
-    return new SegmentInfo(dir, Version.LATEST, name, 10000, false, Codec.getDefault(), null, StringHelper.randomId());
+    return new SegmentInfo(dir, Version.LATEST, name, 10000, false, Codec.getDefault(), null, StringHelper.randomId(), new HashMap<>());
   }
   
   /** Creates a file of the specified size with random data. */

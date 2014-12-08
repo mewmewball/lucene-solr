@@ -28,10 +28,59 @@ http://lucene.apache.org/solr
 Getting Started
 ---------------
 
-See the "example" directory for an example Solr setup.  A tutorial
-using the example setup can be found at
+To start Solr for the first time after installation, simply do:
+
+  bin/solr start -f
+
+This will launch a Solr server in the foreground of your shell, bound
+to port 8983. Alternatively, you can launch Solr in "cloud" mode,
+which allows you to scale out using sharding and replication. To
+launch Solr in cloud mode, do:
+
+  bin/solr start -f -cloud
+
+To see all available options for starting Solr, please do:
+
+  bin/solr start -help
+
+After starting Solr, direct your Web browser to the Solr Admin Console at:
+
+  http://localhost:8983/solr/
+
+To add documents to the index, use the post.jar (or post.sh script) in
+the example/exampledocs subdirectory (while Solr is running), for example:
+
+     cd example/exampledocs
+     java -jar post.jar *.xml
+Or:  sh post.sh *.xml
+
+For more information about Solr examples please read...
+
+ * example/solr/README.txt
+   For more information about the "Solr Home" and Solr specific configuration
+ * http://lucene.apache.org/solr/tutorial.html
+   For a Tutorial using this example configuration
+ * http://wiki.apache.org/solr/SolrResources
+   For a list of other tutorials and introductory articles.
+
+
+In addition, Solr ships with several example configurations that
+help you learn about Solr. To run one of the examples, you would do:
+
+  bin/solr -e <EXAMPLE> where <EXAMPLE> is one of:
+
+    cloud        : SolrCloud example
+    dih          : Data Import Handler (rdbms, mail, rss, tika)
+    schemaless   : Schema-less example (schema is inferred from data during indexing)
+    techproducts : Kitchen sink example providing comprehensive examples of Solr features
+
+
+A tutorial is available at:
+
    http://lucene.apache.org/solr/tutorial.html
+
 or linked from "docs/index.html" in a binary distribution.
+
 Also, there are Solr clients for many programming languages, see 
    http://wiki.apache.org/solr/IntegratingSolr
 
@@ -39,11 +88,15 @@ Also, there are Solr clients for many programming languages, see
 Files included in an Apache Solr binary distribution
 ----------------------------------------------------
 
+server/
+  A self-contained Solr instance, complete with a sample
+  configuration and documents to index. Please see: bin/solr start -help
+  for more information about starting a Solr server.
+
 example/
-  A self-contained example Solr instance, complete with a sample
-  configuration and documents to index.
-  Please see example/README.txt for information about running this
-  example.
+  Contains example documents and an alternative Solr home
+  directory containing examples of how to use the Data Import Handler,
+  see example/example-DIH/README.txt for more information.
 
 dist/solr-<component>-XX.jar
   The Apache Solr libraries.  To compile Apache Solr Plugins,
@@ -58,10 +111,10 @@ docs/index.html
 Instructions for Building Apache Solr from Source
 -------------------------------------------------
 
-1. Download the Java SE 7 JDK (Java Development Kit) or later from http://java.sun.com/
+1. Download the Java SE 8 JDK (Java Development Kit) or later from http://www.oracle.com/java/
    You will need the JDK installed, and the $JAVA_HOME/bin (Windows: %JAVA_HOME%\bin) 
    folder included on your command path. To test this, issue a "java -version" command 
-   from your shell (command prompt) and verify that the Java version is 1.7 or later.
+   from your shell (command prompt) and verify that the Java version is 1.8 or later.
 
 2. Download the Apache Ant binary distribution (1.8.2+) from 
    http://ant.apache.org/  You will need Ant installed and the $ANT_HOME/bin (Windows: 
@@ -85,7 +138,7 @@ Instructions for Building Apache Solr from Source
   
    NOTE: 
    To see Solr in action, you may want to use the "ant example" command to build
-   and package Solr into the example/webapps directory. See also example/README.txt.
+   and package Solr into the server/webapps directory. See also server/README.txt.
 
 
 Export control

@@ -38,6 +38,15 @@ IF EXIST "%SOLR_INCLUDE%" CALL "%SOLR_INCLUDE%"
 
 REM Verify Java is available
 IF DEFINED SOLR_JAVA_HOME set "JAVA_HOME=%SOLR_JAVA_HOME%"
+REM Try to detect JAVA_HOME from the registry
+IF NOT DEFINED JAVA_HOME (
+  FOR /F "skip=2 tokens=2*" %%A IN ('REG QUERY "HKLM\Software\JavaSoft\Java Runtime Environment" /v CurrentVersion') DO set CurVer=%%B
+  FOR /F "skip=2 tokens=2*" %%A IN ('REG QUERY "HKLM\Software\JavaSoft\Java Runtime Environment\!CurVer!" /v JavaHome') DO (
+    set JAVA_HOME=%%B
+    @echo Detected JAVA_HOME=%%B
+  )
+)
+
 IF NOT DEFINED JAVA_HOME goto need_java_home
 set JAVA_HOME=%JAVA_HOME:"=%
 "%JAVA_HOME%"\bin\java -version:1.8 -version > nul 2>&1
@@ -68,8 +77,19 @@ IF "%1"=="stop" goto set_script_cmd
 IF "%1"=="restart" goto set_script_cmd
 IF "%1"=="healthcheck" (
   REM healthcheck uses different arg parsing strategy
+  set SCRIPT_CMD=healthcheck
   SHIFT
   goto parse_healthcheck_args
+)
+IF "%1"=="create_core" (
+  set SCRIPT_CMD=create_core
+  SHIFT
+  goto parse_create_args
+)
+IF "%1"=="create_collection" (
+  set SCRIPT_CMD=create_collection
+  SHIFT
+  goto parse_create_args
 )
 goto parse_args
 
@@ -82,12 +102,15 @@ IF "%FIRST_ARG%"=="/?" goto script_usage
 IF "%SCRIPT_CMD%"=="start" goto start_usage
 IF "%SCRIPT_CMD%"=="restart" goto start_usage
 IF "%SCRIPT_CMD%"=="stop" goto stop_usage
+IF "%SCRIPT_CMD%"=="healthcheck" goto healthcheck_usage
+IF "%SCRIPT_CMD%"=="create_core" goto create_core_usage
+IF "%SCRIPT_CMD%"=="create_collection" goto create_collection_usage
 goto done
 
 :script_usage
 @echo.
 @echo Usage: solr COMMAND OPTIONS
-@echo        where COMMAND is one of: start, stop, restart, healthcheck
+@echo        where COMMAND is one of: start, stop, restart, healthcheck, create_core, create_collection
 @echo.
 @echo   Standalone server example (start Solr running in the background on port 8984):
 @echo.
@@ -133,10 +156,9 @@ goto done
 @echo.
 @echo   -e example    Name of the example to run; available examples:
 @echo       cloud:          SolrCloud example
-@echo       default:        Solr default example
+@echo       techproducts:   Comprehensive example illustrating many of Solr's core capabilities
 @echo       dih:            Data Import Handler
 @echo       schemaless:     Schema-less example
-@echo       multicore:      Multicore
 @echo.
 @echo   -a opts       Additional parameters to pass to the JVM when starting Solr, such as to setup
 @echo                 Java debug options. For example, to enable a Java debugger to attach to the Solr JVM
@@ -157,9 +179,7 @@ goto done
 @echo.
 @echo  -p port     Specify the port to start the Solr HTTP listener on; default is 8983
 @echo.
-@echo  -V          Verbose messages from this script
-@echo.
-@echo NOTE: If port is not specified, then all running Solr servers are stopped.
+@echo  -all        Find and stop all running Solr servers on this host
 @echo.
 goto done
 
@@ -171,6 +191,40 @@ goto done
 @echo.
 @echo   -z zkHost      ZooKeeper connection string; default is localhost:9983
 @echo.
+goto done
+
+:create_core_usage
+echo.
+echo Usage: solr create_core [-n name] [-c configset]
+echo.
+echo   -n name       Name of core to create
+echo.
+echo   -c configset  Name of configuration directory to use, valid options are:
+echo       basic_configs: Minimal Solr configuration
+echo       data_driven_schema_configs: Managed schema with field-guessing support enabled
+echo       sample_techproducts_configs: Example configuration with many optional features enabled to
+echo          demonstrate the full power of Solr
+echo       If not specified, default is: data_driven_schema_configs
+echo.
+goto done
+
+:create_collection_usage
+echo.
+echo Usage: solr create_collection [-n name] [-c configset] [-shards #] [-replicationFactor #]
+echo.
+echo   -n name               Name of collection to create
+echo.
+echo   -c configset          Name of configuration directory to use, valid options are:
+echo       basic_configs: Minimal Solr configuration
+echo       data_driven_schema_configs: Managed schema with field-guessing support enabled
+echo       sample_techproducts_configs: Example configuration with many optional features enabled to
+echo          demonstrate the full power of Solr
+echo       If not specified, default is: data_driven_schema_configs
+echo.
+echo   -shards #             Number of shards to split the collection into
+echo.
+echo   -replicationFactor #  Number of copies of each document in the collection
+echo.
 goto done
 
 REM Really basic command-line arg parsing
@@ -205,6 +259,7 @@ IF "%1"=="-addlopts" goto set_addl_opts
 IF "%1"=="-noprompt" goto set_noprompt
 IF "%1"=="-k" goto set_stop_key
 IF "%1"=="-key" goto set_stop_key
+IF "%1"=="-all" goto set_stop_all
 IF NOT "%1"=="" goto invalid_cmd_line
 
 :set_script_cmd
@@ -230,6 +285,10 @@ goto parse_args
 :set_server_dir
 
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Directory name is required!
+  goto invalid_cmd_line
+)
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected directory but found %2 instead!
@@ -249,6 +308,11 @@ goto parse_args
 :set_solr_home_dir
 
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Directory name is required!
+  goto invalid_cmd_line
+)
+
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected directory but found %2 instead!
@@ -262,6 +326,11 @@ goto parse_args
 :set_example
 
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Example name is required!
+  goto invalid_cmd_line
+)
+
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected example name but found %2 instead!
@@ -276,6 +345,11 @@ goto parse_args
 :set_memory
 
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Memory setting is required!
+  goto invalid_cmd_line
+)
+
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected memory setting but found %2 instead!
@@ -289,6 +363,11 @@ goto parse_args
 
 :set_host
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Hostname is required!
+  goto invalid_cmd_line
+)
+
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected hostname but found %2 instead!
@@ -302,6 +381,11 @@ goto parse_args
 
 :set_port
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Port is required!
+  goto invalid_cmd_line
+)
+
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected port but found %2 instead!
@@ -315,20 +399,34 @@ goto parse_args
 
 :set_stop_key
 set "arg=%~2"
-set firstChar=%arg:~0,1%
-IF "%firstChar%"=="-" (
-  set SCRIPT_ERROR=Expected port but found %2 instead!
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=Stop key is required!
   goto invalid_cmd_line
 )
 
+set firstChar=%arg:~0,1%
+IF "%firstChar%"=="-" (
+  set SCRIPT_ERROR=Expected stop key but found %2 instead!
+  goto invalid_cmd_line
+)
 set STOP_KEY=%~2
 SHIFT
+SHIFT
+goto parse_args
+
+:set_stop_all
+set STOP_ALL=1
 SHIFT
 goto parse_args
 
 :set_zookeeper
 
 set "arg=%~2"
+IF "%arg%"=="" (
+  set SCRIPT_ERROR=ZooKeeper connection string is required!
+  goto invalid_cmd_line
+)
+
 set firstChar=%arg:~0,1%
 IF "%firstChar%"=="-" (
   set SCRIPT_ERROR=Expected ZooKeeper connection string but found %2 instead!
@@ -367,7 +465,6 @@ IF NOT "%SOLR_HOST%"=="" (
   set SOLR_HOST_ARG=
 )
 
-REM TODO: Change this to "server" when we resolve SOLR-3619
 IF "%SOLR_SERVER_DIR%"=="" set SOLR_SERVER_DIR=%DEFAULT_SERVER_DIR%
 
 IF NOT EXIST "%SOLR_SERVER_DIR%" (
@@ -377,17 +474,15 @@ IF NOT EXIST "%SOLR_SERVER_DIR%" (
 
 IF "%EXAMPLE%"=="" (
   REM SOLR_HOME just becomes serverDir/solr
-) ELSE IF "%EXAMPLE%"=="default" (
-  set "SOLR_HOME=%SOLR_TIP%\example\solr"
+) ELSE IF "%EXAMPLE%"=="techproducts" (
+  set "SOLR_HOME=%SOLR_TIP%\server\solr"
 ) ELSE IF "%EXAMPLE%"=="cloud" (
   set SOLR_MODE=solrcloud
   goto cloud_example_start
 ) ELSE IF "%EXAMPLE%"=="dih" (
   set "SOLR_HOME=%SOLR_TIP%\example\example-DIH\solr"
 ) ELSE IF "%EXAMPLE%"=="schemaless" (
-  set "SOLR_HOME=%SOLR_TIP%\example\example-schemaless\solr"
-) ELSE IF "%EXAMPLE%"=="multicore" (
-  set "SOLR_HOME=%SOLR_TIP%\example\multicore"
+  set "SOLR_HOME=%SOLR_TIP%\server\solr"
 ) ELSE (
   @echo.
   @echo 'Unrecognized example %EXAMPLE%!'
@@ -413,17 +508,62 @@ IF NOT EXIST "%SOLR_HOME%\solr.xml" (
 
 IF "%STOP_KEY%"=="" set STOP_KEY=solrrocks
 
-REM TODO stop all if no port specified as Windows doesn't seem to have a
-REM tool that does: ps waux | grep start.jar
+@REM stop logic here
 IF "%SCRIPT_CMD%"=="stop" (
   IF "%SOLR_PORT%"=="" (
-    set SCRIPT_ERROR=Must specify the port when trying to stop Solr!
-    goto err
+    IF "%STOP_ALL%"=="1" (
+      for /f "usebackq" %%i in (`dir /b %SOLR_TIP%\bin ^| findstr /i "^solr-.*\.port$"`) do (
+        set SOME_SOLR_PORT=
+        For /F "Delims=" %%J In (%SOLR_TIP%\bin\%%i) do set SOME_SOLR_PORT=%%~J
+        if NOT "!SOME_SOLR_PORT!"=="" (
+          for /f "tokens=2,5" %%j in ('netstat -aon ^| find /i "listening" ^| find ":!SOME_SOLR_PORT!"') do (
+            @echo Stopping Solr running on port !SOME_SOLR_PORT!
+            set /A STOP_PORT=!SOME_SOLR_PORT! - 1000
+            "%JAVA%" -jar "%SOLR_SERVER_DIR%\start.jar" STOP.PORT=!STOP_PORT! STOP.KEY=%STOP_KEY% --stop
+            del %SOLR_TIP%\bin\solr-!SOME_SOLR_PORT!.port
+            timeout /T 5
+            REM Kill it if it is still running after the graceful shutdown
+            For /f "tokens=5" %%M in ('netstat -nao ^| find /i "listening" ^| find ":!SOME_SOLR_PORT!"') do (taskkill /f /PID %%M)
+          )
+        )
+      )
+    ) ELSE (
+      set SCRIPT_ERROR=Must specify the port when trying to stop Solr, or use -all to stop all running nodes on this host.
+      goto err
+    )
+  ) ELSE (
+    set found_it=0
+    For /f "tokens=5" %%M in ('netstat -nao ^| find /i "listening" ^| find ":%SOLR_PORT%"') do (
+      set found_it=1
+      @echo Stopping Solr running on port %SOLR_PORT%
+      set /A STOP_PORT=%SOLR_PORT% - 1000
+      "%JAVA%" -jar "%SOLR_SERVER_DIR%\start.jar" STOP.PORT=!STOP_PORT! STOP.KEY=%STOP_KEY% --stop
+      del %SOLR_TIP%\bin\solr-%SOLR_PORT%.port
+      timeout /T 5
+      REM Kill it if it is still running after the graceful shutdown
+      For /f "tokens=5" %%j in ('netstat -nao ^| find /i "listening" ^| find ":%SOLR_PORT%"') do (taskkill /f /PID %%j)
+
+      REM backup log files (use current timestamp for backup name)
+      For /f "tokens=2-4 delims=/ " %%a in ('date /t') do (set mydate=%%c-%%a-%%b)
+      For /f "tokens=1-2 delims=/:" %%a in ("%TIME%") do (set mytime=%%a%%b)
+      set now_ts=!mydate!_!mytime!
+      IF EXIST "%SOLR_SERVER_DIR%\logs\solr.log" (
+        echo Backing up %SOLR_SERVER_DIR%\logs\solr.log
+        move /Y "%SOLR_SERVER_DIR%\logs\solr.log" "%SOLR_SERVER_DIR%\logs\solr_log_!now_ts!"
+      )
+
+      IF EXIST "%SOLR_SERVER_DIR%\logs\solr_gc.log" (
+        echo Backing up %SOLR_SERVER_DIR%\logs\solr_gc.log
+        move /Y "%SOLR_SERVER_DIR%\logs\solr_gc.log" "%SOLR_SERVER_DIR%\logs\solr_gc_log_!now_ts!"
+      )
+    )
+    if "!found_it!"=="0" echo No Solr found running on port %SOLR_PORT%
   )
+  goto done
 )
 
 IF "%SOLR_PORT%"=="" set SOLR_PORT=8983
-IF "%STOP_PORT%"=="" set STOP_PORT=79%SOLR_PORT:~-2,2%
+IF "%STOP_PORT%"=="" set /A STOP_PORT=%SOLR_PORT% - 1000
 
 IF "%SCRIPT_CMD%"=="start" (
   REM see if Solr is already running using netstat
@@ -431,30 +571,7 @@ IF "%SCRIPT_CMD%"=="start" (
     set "SCRIPT_ERROR=Process %%j is already listening on port %SOLR_PORT%. If this is Solr, please stop it first before starting (or use restart). If this is not Solr, then please choose a different port using -p PORT"
     goto err
   )
-) ELSE (
-  @echo Stopping Solr running on port %SOLR_PORT%
-  "%JAVA%" -jar "%SOLR_SERVER_DIR%\start.jar" STOP.PORT=%STOP_PORT% STOP.KEY=%STOP_KEY% --stop
-  timeout /T 5
 )
-
-REM Kill it if it is still running after the graceful shutdown
-For /f "tokens=5" %%j in ('netstat -nao ^| find /i "listening" ^| find ":%SOLR_PORT%"') do (taskkill /f /PID %%j)
-
-REM backup log files (use current timestamp for backup name)
-For /f "tokens=2-4 delims=/ " %%a in ('date /t') do (set mydate=%%c-%%a-%%b)
-For /f "tokens=1-2 delims=/:" %%a in ("%TIME%") do (set mytime=%%a%%b)
-set now_ts=%mydate%_%mytime%
-IF EXIST "%SOLR_SERVER_DIR%\logs\solr.log" (
-  echo Backing up %SOLR_SERVER_DIR%\logs\solr.log
-  move /Y "%SOLR_SERVER_DIR%\logs\solr.log" "%SOLR_SERVER_DIR%\logs\solr_log_!now_ts!"
-)
-
-IF EXIST "%SOLR_SERVER_DIR%\logs\solr_gc.log" (
-  echo Backing up %SOLR_SERVER_DIR%\logs\solr_gc.log
-  move /Y "%SOLR_SERVER_DIR%\logs\solr_gc.log" "%SOLR_SERVER_DIR%\logs\solr_gc_log_!now_ts!"
-)
-
-IF "%SCRIPT_CMD%"=="stop" goto done
 
 REM if verbose gc logging enabled, setup the location of the log file
 IF NOT "%GC_LOG_OPTS%"=="" set GC_LOG_OPTS=%GC_LOG_OPTS% -Xloggc:"%SOLR_SERVER_DIR%/logs/solr_gc.log"
@@ -477,12 +594,13 @@ IF "%SOLR_MODE%"=="solrcloud" (
 
 REM These are useful for attaching remove profilers like VisualVM/JConsole
 IF "%ENABLE_REMOTE_JMX_OPTS%"=="true" (
+  IF "!RMI_PORT!"=="" set RMI_PORT=1%SOLR_PORT%
   set REMOTE_JMX_OPTS=-Dcom.sun.management.jmxremote ^
 -Dcom.sun.management.jmxremote.local.only=false ^
 -Dcom.sun.management.jmxremote.ssl=false ^
 -Dcom.sun.management.jmxremote.authenticate=false ^
--Dcom.sun.management.jmxremote.port=10%SOLR_PORT:~-2,2% ^
--Dcom.sun.management.jmxremote.rmi.port=10%SOLR_PORT:~-2,2%
+-Dcom.sun.management.jmxremote.port=!RMI_PORT! ^
+-Dcom.sun.management.jmxremote.rmi.port=!RMI_PORT!
 
 IF NOT "%SOLR_HOST%"=="" set REMOTE_JMX_OPTS=%REMOTE_JMX_OPTS% -Djava.rmi.server.hostname=%SOLR_HOST%
 ) ELSE (
@@ -493,6 +611,32 @@ IF NOT "%SOLR_HEAP%"=="" set SOLR_JAVA_MEM=-Xms%SOLR_HEAP% -Xmx%SOLR_HEAP%
 IF "%SOLR_JAVA_MEM%"=="" set SOLR_JAVA_MEM=-Xms512m -Xmx512m
 IF "%SOLR_TIMEZONE%"=="" set SOLR_TIMEZONE=UTC
 
+@REM Add Java version specific flags if needed
+set JAVAVER=
+set JAVA_MAJOR=
+set JAVA_BUILD=0
+
+"%JAVA%" -version 2>&1 | findstr /i "version" > javavers
+set /p JAVAVEROUT=<javavers
+del javavers
+for /f "tokens=3" %%g in ("!JAVAVEROUT!") do (
+  set JAVAVER=%%g
+  set JAVAVER=!JAVAVER:"=!
+  for /f "delims=_ tokens=1-3" %%v in ("!JAVAVER!") do (
+    set JAVA_MAJOR=!JAVAVER:~0,3!
+    set /a JAVA_BUILD=%%w
+  )
+)
+IF "!JAVA_MAJOR!"=="1.7" (
+  set "GC_TUNE=%GC_TUNE% -XX:CMSFullGCsBeforeCompaction=1 -XX:CMSTriggerPermRatio=80"
+  IF !JAVA_BUILD! GEQ 40 (
+    IF !JAVA_BUILD! LEQ 51 (
+      set "GC_TUNE=!GC_TUNE! -XX:-UseSuperWord"
+      @echo WARNING: Java version !JAVAVER! has known bugs with Lucene and requires the -XX:-UseSuperWord flag. Please consider upgrading your JVM.
+    )
+  )
+)
+
 IF "%verbose%"=="1" (
     @echo Starting Solr using the following settings:
     @echo     JAVA            = %JAVA%
@@ -500,33 +644,95 @@ IF "%verbose%"=="1" (
     @echo     SOLR_HOME       = %SOLR_HOME%
     @echo     SOLR_HOST       = %SOLR_HOST%
     @echo     SOLR_PORT       = %SOLR_PORT%
-    @echo     GC_TUNE         = %GC_TUNE%
-    @echo     GC_LOG_OPTS     = %GC_LOG_OPTS%
+    @echo     STOP_PORT       = %STOP_PORT%
     @echo     SOLR_JAVA_MEM   = %SOLR_JAVA_MEM%
-    @echo     REMOTE_JMX_OPTS = %REMOTE_JMX_OPTS%
-    @echo     CLOUD_MODE_OPTS = %CLOUD_MODE_OPTS%
+    @echo     GC_TUNE         = !GC_TUNE!
+    @echo     GC_LOG_OPTS     = %GC_LOG_OPTS%
     @echo     SOLR_TIMEZONE   = %SOLR_TIMEZONE%
+
+    IF "%SOLR_MODE%"=="solrcloud" (
+      @echo     CLOUD_MODE_OPTS = %CLOUD_MODE_OPTS%
+    )
+
+    IF NOT "%SOLR_OPTS%"=="" (
+      @echo     SOLR_OPTS       = %SOLR_OPTS%
+    )
+
+    IF NOT "%SOLR_ADDL_ARGS%"=="" (
+      @echo     SOLR_ADDL_ARGS  = %SOLR_ADDL_ARGS%
+    )
+
+    IF "%ENABLE_REMOTE_JMX_OPTS%"=="true" (
+        @echo     RMI_PORT        = !RMI_PORT!
+        @echo     REMOTE_JMX_OPTS = %REMOTE_JMX_OPTS%
+    )
 )
 
-set START_OPTS=-Duser.timezone=%SOLR_TIMEZONE% -Djava.net.preferIPv4Stack=true -Dsolr.autoSoftCommit.maxTime=3000
-set START_OPTS=%START_OPTS% %GC_TUNE% %GC_LOG_OPTS%
+set START_OPTS=-Duser.timezone=%SOLR_TIMEZONE% -Djava.net.preferIPv4Stack=true
+set START_OPTS=%START_OPTS% !GC_TUNE! %GC_LOG_OPTS%
 IF NOT "!CLOUD_MODE_OPTS!"=="" set START_OPTS=%START_OPTS% !CLOUD_MODE_OPTS!
 IF NOT "%REMOTE_JMX_OPTS%"=="" set START_OPTS=%START_OPTS% %REMOTE_JMX_OPTS%
 IF NOT "%SOLR_ADDL_ARGS%"=="" set START_OPTS=%START_OPTS% %SOLR_ADDL_ARGS%
 IF NOT "%SOLR_HOST_ARG%"=="" set START_OPTS=%START_OPTS% %SOLR_HOST_ARG%
+IF NOT "%SOLR_OPTS%"=="" set START_OPTS=%START_OPTS% %SOLR_OPTS%
 
 cd "%SOLR_SERVER_DIR%"
+
+IF NOT EXIST "%SOLR_SERVER_DIR%\logs" (
+  mkdir "%SOLR_SERVER_DIR%\logs"
+)
+
 @echo.
 @echo Starting Solr on port %SOLR_PORT% from %SOLR_SERVER_DIR%
 @echo.
 IF "%FG%"=="1" (
   REM run solr in the foreground
-  "%JAVA%" -server -Xss256k %SOLR_JAVA_MEM% %START_OPTS% -DSTOP.PORT=%STOP_PORT% -DSTOP.KEY=%STOP_KEY% ^
-    -Djetty.port=%SOLR_PORT% -Dsolr.solr.home="%SOLR_HOME%" -jar start.jar
+  title "Solr-%SOLR_PORT%"
+  echo %SOLR_PORT%>%SOLR_TIP%\bin\solr-%SOLR_PORT%.port
+  "%JAVA%" -server -Xss256k %SOLR_JAVA_MEM% %START_OPTS% -DSTOP.PORT=!STOP_PORT! -DSTOP.KEY=%STOP_KEY% ^
+    -Djetty.port=%SOLR_PORT% -Dsolr.solr.home="%SOLR_HOME%" -Dsolr.install.dir="%SOLR_TIP%" -jar start.jar
 ) ELSE (
-  START "" "%JAVA%" -server -Xss256k %SOLR_JAVA_MEM% %START_OPTS% -DSTOP.PORT=%STOP_PORT% -DSTOP.KEY=%STOP_KEY% ^
-    -Djetty.port=%SOLR_PORT% -Dsolr.solr.home="%SOLR_HOME%" -jar start.jar > "%SOLR_SERVER_DIR%\logs\solr-%SOLR_PORT%-console.log"
+  START "Solr-%SOLR_PORT%" "%JAVA%" -server -Xss256k %SOLR_JAVA_MEM% %START_OPTS% -DSTOP.PORT=!STOP_PORT! -DSTOP.KEY=%STOP_KEY% ^
+    -Djetty.port=%SOLR_PORT% -Dsolr.solr.home="%SOLR_HOME%" -Dsolr.install.dir="%SOLR_TIP%" -jar start.jar > "%SOLR_SERVER_DIR%\logs\solr-%SOLR_PORT%-console.log"
+  echo %SOLR_PORT%>%SOLR_TIP%\bin\solr-%SOLR_PORT%.port
 )
+
+
+set CREATE_EXAMPLE_CONFIG=
+IF "%EXAMPLE%"=="schemaless" (
+  set CREATE_EXAMPLE_CONFIG=data_driven_schema_configs
+)
+IF "%EXAMPLE%"=="techproducts" (
+  set CREATE_EXAMPLE_CONFIG=sample_techproducts_configs
+)
+
+IF NOT "!CREATE_EXAMPLE_CONFIG!"=="" (
+  timeout /T 10
+  IF "%SOLR_MODE%"=="solrcloud" (
+    "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
+      -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
+      org.apache.solr.util.SolrCLI create_collection -name !EXAMPLE! -shards 1 -replicationFactor 1 ^
+      -config !CREATE_EXAMPLE_CONFIG! -configsetsDir "%SOLR_SERVER_DIR%\solr\configsets" -solrUrl http://localhost:%SOLR_PORT%/solr
+  ) ELSE (
+    "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
+      -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
+      org.apache.solr.util.SolrCLI create_core -name !EXAMPLE! -solrUrl http://localhost:%SOLR_PORT%/solr ^
+      -config !CREATE_EXAMPLE_CONFIG! -configsetsDir "%SOLR_SERVER_DIR%\solr\configsets"
+  )
+)
+
+IF "%EXAMPLE%"=="techproducts" (
+  @echo.
+  @echo Indexing tech product example docs from %SOLR_TIP%\example\exampledocs
+  "%JAVA%" -Durl=http://localhost:%SOLR_PORT%/solr/%EXAMPLE%/update -jar %SOLR_TIP%/example/exampledocs/post.jar %SOLR_TIP%/example/exampledocs/*.xml
+)
+
+@echo.
+IF NOT "%EXAMPLE%"=="" (
+  @echo Solr %EXAMPLE% example launched successfully.
+)
+@echo Direct your Web browser to http://localhost:%SOLR_PORT%/solr to visit the Solr Admin UI
+@echo.
 
 goto done
 
@@ -562,6 +768,30 @@ IF NOT DEFINED CLOUD_NUM_NODES (
 @echo Ok, let's start up %CLOUD_NUM_NODES% Solr nodes for your example SolrCloud cluster.
 
 :start_cloud_nodes
+
+@echo Cloning %DEFAULT_SERVER_DIR% into %SOLR_TIP%\node1
+mkdir "%SOLR_TIP%\node1"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\contexts" "%SOLR_TIP%\node1\contexts"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\etc" "%SOLR_TIP%\node1\etc"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\lib" "%SOLR_TIP%\node1\lib"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\resources" "%SOLR_TIP%\node1\resources"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\scripts" "%SOLR_TIP%\node1\scripts"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\webapps" "%SOLR_TIP%\node1\webapps"
+copy "%DEFAULT_SERVER_DIR%\start.jar" "%SOLR_TIP%\node1\start.jar"
+mkdir "%SOLR_TIP%\node1\solr-webapp"
+mkdir "%SOLR_TIP%\node1\solr"
+mkdir "%SOLR_TIP%\node1\logs"
+xcopy /Q /E /I "%DEFAULT_SERVER_DIR%\solr\configsets" "%SOLR_TIP%\node1\solr\configsets"
+copy "%DEFAULT_SERVER_DIR%\solr\solr.xml" "%SOLR_TIP%\node1\solr\solr.xml"
+copy "%DEFAULT_SERVER_DIR%\solr\zoo.cfg" "%SOLR_TIP%\node1\solr\zoo.cfg"
+
+for /l %%x in (2, 1, !CLOUD_NUM_NODES!) do (
+  IF NOT EXIST "%SOLR_TIP%\node%%x" (
+    @echo Cloning %SOLR_TIP%\node1 into %SOLR_TIP%\node%%x
+    xcopy /Q /E /I "%SOLR_TIP%\node1" "%SOLR_TIP%\node%%x"
+  )
+)
+
 for /l %%x in (1, 1, !CLOUD_NUM_NODES!) do (
   set USER_INPUT=
   set /A idx=%%x-1
@@ -588,11 +818,6 @@ for /l %%x in (1, 1, !CLOUD_NUM_NODES!) do (
     @echo.
   )
 
-  IF NOT EXIST "%SOLR_TIP%\node%%x" (
-    @echo Cloning %DEFAULT_SERVER_DIR% into %SOLR_TIP%\node%%x
-    xcopy /Q /E /I "%DEFAULT_SERVER_DIR%" "%SOLR_TIP%\node%%x"
-  )
-
   IF NOT "!SOLR_HEAP!"=="" (
     set "DASHM=-m !SOLR_HEAP!"
   ) ELSE (
@@ -608,8 +833,9 @@ for /l %%x in (1, 1, !CLOUD_NUM_NODES!) do (
     )
     @echo Starting node1 on port !NODE_PORT! using command:
     @echo solr -cloud -p !NODE_PORT! -d node1 !DASHZ! !DASHM!
-    START "" "%SDIR%\solr" -f -cloud -p !NODE_PORT! -d node1 !DASHZ! !DASHM!
+    START "Solr-!NODE_PORT!" "%SDIR%\solr" -f -cloud -p !NODE_PORT! -d node1 !DASHZ! !DASHM!
     set NODE1_PORT=!NODE_PORT!
+    echo !NODE_PORT!>%SOLR_TIP%\bin\solr-!NODE_PORT!.port
   ) ELSE (
     IF "!ZK_HOST!"=="" (
       set /A ZK_PORT=!NODE1_PORT!+1000
@@ -617,7 +843,8 @@ for /l %%x in (1, 1, !CLOUD_NUM_NODES!) do (
     )
     @echo Starting node%%x on port !NODE_PORT! using command:
     @echo solr -cloud -p !NODE_PORT! -d node%%x -z !ZK_HOST! !DASHM!
-    START "" "%SDIR%\solr" -f -cloud -p !NODE_PORT! -d node%%x -z !ZK_HOST! !DASHM!
+    START "Solr-!NODE_PORT!" "%SDIR%\solr" -f -cloud -p !NODE_PORT! -d node%%x -z !ZK_HOST! !DASHM!
+    echo !NODE_PORT!>%SOLR_TIP%\bin\solr-!NODE_PORT!.port
   )
 
   timeout /T 10
@@ -630,8 +857,7 @@ IF "%NO_USER_PROMPT%"=="1" (
   set CLOUD_COLLECTION=gettingstarted
   set CLOUD_NUM_SHARDS=2
   set CLOUD_REPFACT=2
-  set CLOUD_CONFIG=default
-  set "CLOUD_CONFIG_DIR=%SOLR_TIP%\example\solr\collection1\conf"
+  set CLOUD_CONFIG=data_driven_schema_configs
   goto create_collection
 ) ELSE (
   goto get_create_collection_params
@@ -656,43 +882,17 @@ set CLOUD_REPFACT=!USER_INPUT!
 echo !CLOUD_REPFACT!
 set USER_INPUT=
 echo.
-set /P "USER_INPUT=Please choose a configuration for the !CLOUD_COLLECTION! collection, available options are: default or schemaless [default] "
-IF "!USER_INPUT!"=="" set USER_INPUT=default
+set /P "USER_INPUT=Please choose a configuration for the !CLOUD_COLLECTION! collection, available options are: basic_configs, data_driven_schema_configs, or sample_techproducts_configs [data_driven_schema_configs]"
+IF "!USER_INPUT!"=="" set USER_INPUT=data_driven_schema_configs
 set CLOUD_CONFIG=!USER_INPUT!
 echo !CLOUD_CONFIG!
-
-IF "!CLOUD_CONFIG!"=="schemaless" (
-  IF EXIST "%SOLR_TIP%\server\solr\configsets\schemaless" set "CLOUD_CONFIG_DIR=%SOLR_TIP%\server\solr\configsets\schemaless"
-  IF NOT EXIST "%SOLR_TIP%\server\solr\configsets\schemaless" set "CLOUD_CONFIG_DIR=%SOLR_TIP%\example\example-schemaless\solr\collection1\conf"
-) ELSE (
-  set "CLOUD_CONFIG_DIR=%SOLR_TIP%\example\solr\collection1\conf"
-)
-
 goto create_collection
 
 :create_collection
-set /A MAX_SHARDS_PER_NODE=((!CLOUD_NUM_SHARDS!*!CLOUD_REPFACT!)/!CLOUD_NUM_NODES!)+1
-
-echo.
-echo Deploying default Solr configuration files to embedded ZooKeeper
-echo.
 "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
   -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
-  org.apache.solr.cloud.ZkCLI -zkhost %zk_host% -cmd upconfig -confdir "!CLOUD_CONFIG_DIR!" -confname !CLOUD_CONFIG!
-
-set COLLECTIONS_API=http://localhost:!NODE1_PORT!/solr/admin/collections
-
-set "CLOUD_CREATE_COLLECTION_CMD=%COLLECTIONS_API%?action=CREATE&name=%CLOUD_COLLECTION%&replicationFactor=%CLOUD_REPFACT%&numShards=%CLOUD_NUM_SHARDS%&collection.configName=!CLOUD_CONFIG!&maxShardsPerNode=%MAX_SHARDS_PER_NODE%&wt=json&indent=2"
-echo Creating new collection %CLOUD_COLLECTION% with %CLOUD_NUM_SHARDS% shards and replication factor %CLOUD_REPFACT% using Collections API command:
-echo.
-@echo "%CLOUD_CREATE_COLLECTION_CMD%"
-echo.
-echo For more information about the Collections API, please see: https://cwiki.apache.org/confluence/display/solr/Collections+API
-echo.
-
-"%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
-  -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
-  org.apache.solr.util.SolrCLI api -get "%CLOUD_CREATE_COLLECTION_CMD%"
+  org.apache.solr.util.SolrCLI create_collection -name !CLOUD_COLLECTION! -shards !CLOUD_NUM_SHARDS! -replicationFactor !CLOUD_REPFACT! ^
+  -config !CLOUD_CONFIG! -configsetsDir "%SOLR_SERVER_DIR%\solr\configsets" -zkHost %zk_host%
 
 echo.
 echo SolrCloud example is running, please visit http://localhost:%NODE1_PORT%/solr"
@@ -705,20 +905,19 @@ goto done
 :get_info
 REM Find all Java processes, correlate with those listening on a port
 REM and then try to contact via that port using the status tool
-for /f "tokens=2" %%a in ('tasklist ^| find "java.exe"') do (
-  for /f "tokens=2,5" %%j in ('netstat -aon ^| find /i "listening"') do (
-    if "%%k" EQU "%%a" (
+for /f "usebackq" %%i in (`dir /b %SOLR_TIP%\bin ^| findstr /i "^solr-.*\.port$"`) do (
+  set SOME_SOLR_PORT=
+  For /F "Delims=" %%J In (%SOLR_TIP%\bin\%%i) do set SOME_SOLR_PORT=%%~J
+  if NOT "!SOME_SOLR_PORT!"=="" (
+    for /f "tokens=2,5" %%j in ('netstat -aon ^| find /i "listening" ^| find /i "!SOME_SOLR_PORT!"') do (
       for /f "delims=: tokens=1,2" %%x IN ("%%j") do (
-        if "0.0.0.0" EQU "%%x" (
-          @echo.
-          set has_info=1
-          echo Found Solr process %%k running on port %%y
-          "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
-            -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
-            org.apache.solr.util.SolrCLI status -solr http://localhost:%%y/solr
-
-          @echo.
-        )
+        @echo.
+        set has_info=1
+        echo Found Solr process %%k running on port !SOME_SOLR_PORT!
+        "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
+          -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
+          org.apache.solr.util.SolrCLI status -solr http://localhost:!SOME_SOLR_PORT!/solr
+        @echo.
       )
     )
   )
@@ -758,6 +957,91 @@ IF NOT DEFINED HEALTHCHECK_ZK_HOST set "HEALTHCHECK_ZK_HOST=localhost:9983"
   org.apache.solr.util.SolrCLI healthcheck -collection !HEALTHCHECK_COLLECTION! -zkHost !HEALTHCHECK_ZK_HOST!
 goto done
 
+:parse_create_args
+IF [%1]==[] goto run_create
+IF "%1"=="-c" goto set_create_config
+IF "%1"=="-configset" goto set_create_config
+IF "%1"=="-n" goto set_create_name
+IF "%1"=="-name" goto set_create_name
+IF "%1"=="-shards" goto set_create_shards
+IF "%1"=="-replicationFactor" goto set_create_rf
+IF "%1"=="-p" goto set_create_port
+IF "%1"=="-help" goto usage
+IF "%1"=="-usage" goto usage
+IF "%1"=="/?" goto usage
+goto run_create
+
+:set_create_configset
+set CREATE_CONFIGSET=%~2
+SHIFT
+SHIFT
+goto parse_create_args
+
+:set_create_name
+set CREATE_NAME=%~2
+SHIFT
+SHIFT
+goto parse_create_args
+
+:set_create_port
+set CREATE_PORT=%~2
+SHIFT
+SHIFT
+goto parse_create_args
+
+:set_create_shards
+set CREATE_NUM_SHARDS=%~2
+SHIFT
+SHIFT
+goto parse_create_args
+
+:set_create_rf
+set CREATE_REPFACT=%~2
+SHIFT
+SHIFT
+goto parse_create_args
+
+:run_create
+IF "!CREATE_NAME!"=="" (
+  set "SCRIPT_ERROR=Name (-n) is a required parameter for $SCRIPT_CMD"
+  goto invalid_cmd_line
+)
+IF "!CREATE_CONFIGSET!"=="" set CREATE_CONFIGSET=data_driven_schema_configs
+IF "!CREATE_NUM_SHARDS!"=="" set CREATE_NUM_SHARDS=1
+IF "!CREATE_REPFACT!"=="" set CREATE_REPFACT=1
+
+REM Find a port that Solr is running on
+if "!CREATE_PORT!"=="" (
+  for /f "usebackq" %%i in (`dir /b %SOLR_TIP%\bin ^| findstr /i "^solr-.*\.port$"`) do (
+    set SOME_SOLR_PORT=
+    For /F "Delims=" %%J In (%SOLR_TIP%\bin\%%i) do set SOME_SOLR_PORT=%%~J
+    if NOT "!SOME_SOLR_PORT!"=="" (
+      for /f "tokens=2,5" %%j in ('netstat -aon ^| find /i "listening" ^| find /i "!SOME_SOLR_PORT!"') do (
+        set CREATE_PORT=!SOME_SOLR_PORT!
+      )
+    )
+  )
+)
+if "!CREATE_PORT!"=="" (
+  set "SCRIPT_ERROR=Could not find a running Solr instance on this host! Please use the -p option to specify the port."
+  goto err
+)
+
+@echo Found Solr node running on port !CREATE_PORT!
+
+if "%SCRIPT_CMD%"=="create_core" (
+  "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
+    -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
+    org.apache.solr.util.SolrCLI create_core -name !CREATE_NAME!  -solrUrl http://localhost:!CREATE_PORT!/solr ^
+    -config !CREATE_CONFIGSET! -configsetsDir "%SOLR_TIP%\server\solr\configsets"
+) else (
+  "%JAVA%" -Dlog4j.configuration="file:%DEFAULT_SERVER_DIR%\scripts\cloud-scripts\log4j.properties" ^
+    -classpath "%DEFAULT_SERVER_DIR%\solr-webapp\webapp\WEB-INF\lib\*;%DEFAULT_SERVER_DIR%\lib\ext\*" ^
+    org.apache.solr.util.SolrCLI create_collection -name !CREATE_NAME! -shards !CREATE_NUM_SHARDS! -replicationFactor !CREATE_REPFACT! ^
+    -config !CREATE_CONFIGSET! -configsetsDir "%SOLR_TIP%\server\solr\configsets" -solrUrl http://localhost:!CREATE_PORT!/solr
+)
+goto done
+
 :invalid_cmd_line
 @echo.
 IF "!SCRIPT_ERROR!"=="" (
@@ -776,16 +1060,20 @@ IF "%FIRST_ARG%"=="start" (
   goto stop_usage
 ) ELSE IF "%FIRST_ARG%"=="healthcheck" (
   goto healthcheck_usage
+) ELSE IF "%FIRST_ARG%"=="create_core" (
+  goto create_core_usage
+) ELSE IF "%FIRST_ARG%"=="create_collection" (
+  goto create_collection_usage
 ) ELSE (
   goto script_usage
 )
 
 :need_java_home
-@echo Please set the JAVA_HOME environment variable to the path where you installed Java 1.7+
+@echo Please set the JAVA_HOME environment variable to the path where you installed Java 1.8+
 goto done
 
 :need_java_vers
-@echo Java 1.7 or later is required to run Solr.
+@echo Java 1.8 or later is required to run Solr.
 goto done
 
 :err

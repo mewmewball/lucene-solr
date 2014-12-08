@@ -18,7 +18,7 @@ package org.apache.lucene.util;
  */
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.Arrays;
 
 import org.apache.lucene.search.DocIdSetIterator;
 
@@ -156,7 +156,7 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
       insertLong(i4096, i64, i, index);
     }
   }
-  
+
   private void insertBlock(int i4096, int i64, int i) {
     indices[i4096] = 1L << i64; // shifts are mod 64 in java
     assert bits[i4096] == null;
@@ -196,10 +196,10 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
     assert consistent(i);
     final int i4096 = i >>> 12;
     final int i64 = i >>> 6;
-    clearWithinLong(i4096, i64, ~(1L << i));
+    and(i4096, i64, ~(1L << i));
   }
 
-  private void clearWithinLong(int i4096, int i64, long mask) {
+  private void and(int i4096, int i64, long mask) {
     final long index = indices[i4096];
     if ((index & (1L << i64)) != 0) {
       // offset of the long bits we are interested in in the array
@@ -225,6 +225,7 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
       System.arraycopy(bitArray, o + 1, bitArray, o, length - o);
       bitArray[length] = 0L;
     }
+    nonZeroLongCount -= 1;
   }
 
   @Override
@@ -241,6 +242,7 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
     } else {
       clearWithinBlock(firstBlock, from & MASK_4096, MASK_4096);
       for (int i = firstBlock + 1; i < lastBlock; ++i) {
+        nonZeroLongCount -= Long.bitCount(indices[i]);
         indices[i] = 0;
         bits[i] = null;
       }
@@ -258,14 +260,14 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
     int lastLong = to >>> 6;
 
     if (firstLong == lastLong) {
-      clearWithinLong(i4096, firstLong, ~mask(from, to));
+      and(i4096, firstLong, ~mask(from, to));
     } else {
       assert firstLong < lastLong;
-      clearWithinLong(i4096, lastLong, ~mask(0, to));
+      and(i4096, lastLong, ~mask(0, to));
       for (int i = lastLong - 1; i >= firstLong + 1; --i) {
-        clearWithinLong(i4096, i, 0L);
+        and(i4096, i, 0L);
       }
-      clearWithinLong(i4096, firstLong, ~mask(from, 63));
+      and(i4096, firstLong, ~mask(from, 63));
     }
   }
 
@@ -288,66 +290,224 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
     assert i < length;
     final int i4096 = i >>> 12;
     final long index = indices[i4096];
+    final long[] bitArray = this.bits[i4096];
     int i64 = i >>> 6;
-    long indexBits = index >>> i64;
-    if (indexBits == 0) {
-      // if the index is zero, it means that there is no value in the
-      // current block, so return the first document of the next block
-      // or
-      // if neither the i64-th bit or any other bit on its left is set then
-      // it means that there are no more documents in this block, go to the
-      // next one
-      return firstDoc(i4096 + 1);
-    } else {
-      // We know we still have some 64-bits blocks that have bits set, let's
-      // advance to the next one by skipping trailing zeros of the index
-      int i1 = i & 0x3F;
-      int trailingZeros = Long.numberOfTrailingZeros(indexBits);
-      if (trailingZeros != 0) {
-        // no bits in the current long, go to the next one
-        i64 += trailingZeros;
-        i1 = 0;
+    int o = Long.bitCount(index & ((1L << i64) - 1));
+    if ((index & (1L << i64)) != 0) {
+      // There is at least one bit that is set in the current long, check if
+      // one of them is after i
+      final long bits = bitArray[o] >>> i; // shifts are mod 64
+      if (bits != 0) {
+        return i + Long.numberOfTrailingZeros(bits);
       }
-
-      // So now we are on a sub 64-bits block that has values
-      assert (index & (1L << i64)) != 0;
-      // we count the number of ones on the left of i64 to figure out the
-      // index of the long that contains the bits we are interested in
-      int longIndex = Long.bitCount(index & ((1L << i64) - 1)); // shifts are mod 64 in java
-      final long[] longArray = bits[i4096];
-      assert longArray[longIndex] != 0;
-      long bits = longArray[longIndex] >>> i1; // shifts are mod 64 in java
-      if (bits != 0L) {
-        // hurray, we found some non-zero bits, this gives us the next document:
-        i1 += Long.numberOfTrailingZeros(bits);
-        return (i4096 << 12) | ((i64 & 0x3F) << 6) | i1;
-      }
-
-      // otherwise it means that although we were on a sub-64 block that contains
-      // documents, all documents of this sub-block have already been consumed
-      // so two cases:
-      indexBits = index >>> i64 >>> 1; // we don't shift by (i64+1) otherwise we might shift by a multiple of 64 which is a no-op
-      if (indexBits == 0) {
-        // Case 1: this was the last long of the block of 4096 bits, then go
-        // to the next block
-        return firstDoc(i4096 + 1);
-      }
-      // Case 2: go to the next sub 64-bits block in the current block of 4096 bits
-      // by skipping trailing zeros of the index
-      trailingZeros = Long.numberOfTrailingZeros(indexBits);
-      i64 += 1 + trailingZeros;
-      bits = longArray[longIndex + 1];
-      assert bits != 0;
-      i1 = Long.numberOfTrailingZeros(bits);
-      return (i4096 << 12) | ((i64 & 0x3F) << 6) | i1;
+      o += 1;
     }
+    final long indexBits = index >>> i64 >>> 1;
+    if (indexBits == 0) {
+      // no more bits are set in the current block of 4096 bits, go to the next one
+      return firstDoc(i4096 + 1);
+    }
+    // there are still set bits
+    i64 += 1 + Long.numberOfTrailingZeros(indexBits);
+    final long bits = bitArray[o];
+    return (i64 << 6) | Long.numberOfTrailingZeros(bits);
+  }
+
+  /** Return the last document that occurs on or before the provided block index. */
+  private int lastDoc(int i4096) {
+    long index;
+    while (i4096 >= 0) {
+      index = indices[i4096];
+      if (index != 0) {
+        final int i64 = 63 - Long.numberOfLeadingZeros(index);
+        final long bits = this.bits[i4096][Long.bitCount(index) - 1];
+        return (i4096 << 12) | (i64 << 6) | (63 - Long.numberOfLeadingZeros(bits));
+      }
+      i4096 -= 1;
+    }
+    return -1;
+  }
+
+  @Override
+  public int prevSetBit(int i) {
+    assert i >= 0;
+    final int i4096 = i >>> 12;
+    final long index = indices[i4096];
+    final long[] bitArray = this.bits[i4096];
+    int i64 = i >>> 6;
+    final long indexBits = index & ((1L << i64) - 1);
+    final int o = Long.bitCount(indexBits);
+    if ((index & (1L << i64)) != 0) {
+      // There is at least one bit that is set in the same long, check if there
+      // is one bit that is set that is lower than i
+      final long bits = bitArray[o] & ((1L << i << 1) - 1);
+      if (bits != 0) {
+        return (i64 << 6) | (63 - Long.numberOfLeadingZeros(bits));
+      }
+    }
+    if (indexBits == 0) {
+      // no more bits are set in this block, go find the last bit in the
+      // previous block
+      return lastDoc(i4096 - 1);
+    }
+    // go to the previous long
+    i64 = 63 - Long.numberOfLeadingZeros(indexBits);
+    final long bits = bitArray[o - 1];
+    return (i4096 << 12) | (i64 << 6) | (63 - Long.numberOfLeadingZeros(bits));
+  }
+
+  /** Return the long bits at the given <code>i64</code> index. */
+  private long longBits(long index, long[] bits, int i64) {
+    if ((index & (1L << i64)) == 0) {
+      return 0L;
+    } else {
+      return bits[Long.bitCount(index & ((1L << i64) - 1))];
+    }
+  }
+
+  private void or(final int i4096, final long index, long[] bits, int nonZeroLongCount) {
+    assert Long.bitCount(index) == nonZeroLongCount;
+    final long currentIndex = indices[i4096];
+    if (currentIndex == 0) {
+      // fast path: if we currently have nothing in the block, just copy the data
+      // this especially happens all the time if you call OR on an empty set
+      indices[i4096] = index;
+      this.bits[i4096] = Arrays.copyOf(bits, nonZeroLongCount);
+      this.nonZeroLongCount += nonZeroLongCount;
+      return;
+    }
+    final long[] currentBits = this.bits[i4096];
+    final long[] newBits;
+    final long newIndex = currentIndex | index;
+    final int requiredCapacity = Long.bitCount(newIndex);
+    if (currentBits.length >= requiredCapacity) {
+      newBits = currentBits;
+    } else {
+      newBits = new long[oversize(requiredCapacity)];
+    }
+    // we iterate backwards in order to not override data we might need on the next iteration if the
+    // array is reused
+    for (int i = Long.numberOfLeadingZeros(newIndex), newO = Long.bitCount(newIndex) - 1;
+        i < 64;
+        i += 1 + Long.numberOfLeadingZeros(newIndex << (i + 1)), newO -= 1) {
+      // bitIndex is the index of a bit which is set in newIndex and newO is the number of 1 bits on its right
+      final int bitIndex = 63 - i;
+      assert newO == Long.bitCount(newIndex & ((1L << bitIndex) - 1));
+      newBits[newO] = longBits(currentIndex, currentBits, bitIndex) | longBits(index, bits, bitIndex);
+    }
+    indices[i4096] = newIndex;
+    this.bits[i4096] = newBits;
+    this.nonZeroLongCount += nonZeroLongCount - Long.bitCount(currentIndex & index);
+  }
+
+  private void or(SparseFixedBitSet other) {
+    for (int i = 0; i < other.indices.length; ++i) {
+      final long index = other.indices[i];
+      if (index != 0) {
+        or(i, index, other.bits[i], Long.bitCount(index));
+      }
+    }
+  }
+
+  /**
+   * {@link #or(DocIdSetIterator)} impl that works best when <code>it</code> is dense
+   */
+  private void orDense(DocIdSetIterator it) throws IOException {
+    assertUnpositioned(it);
+    // The goal here is to try to take advantage of the ordering of documents
+    // to build the data-structure more efficiently
+    // NOTE: this heavily relies on the fact that shifts are mod 64
+    final int firstDoc = it.nextDoc();
+    if (firstDoc == DocIdSetIterator.NO_MORE_DOCS) {
+      return;
+    }
+    int i4096 = firstDoc >>> 12;
+    int i64 = firstDoc >>> 6;
+    long index = 1L << i64;
+    long currentLong = 1L << firstDoc;
+    // we store at most 64 longs per block so preallocate in order never to have to resize
+    long[] longs = new long[64];
+    int numLongs = 0;
+
+    for (int doc = it.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = it.nextDoc()) {
+      final int doc64 = doc >>> 6;
+      if (doc64 == i64) {
+        // still in the same long, just set the bit
+        currentLong |= 1L << doc;
+      } else {
+        longs[numLongs++] = currentLong;
+
+        final int doc4096 = doc >>> 12;
+        if (doc4096 == i4096) {
+          index |= 1L << doc64;
+        } else {
+          // we are on a new block, flush what we buffered
+          or(i4096, index, longs, numLongs);
+          // and reset state for the new block
+          i4096 = doc4096;
+          index = 1L << doc64;
+          numLongs = 0;
+        }
+
+        // we are on a new long, reset state
+        i64 = doc64;
+        currentLong = 1L << doc;
+      }
+    }
+
+    // flush
+    longs[numLongs++] = currentLong;
+    or(i4096, index, longs, numLongs);
   }
 
   @Override
   public void or(DocIdSetIterator it) throws IOException {
-    for (int doc = it.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = it.nextDoc()) {
-      set(doc);
+    {
+      // specialize union with another SparseFixedBitSet
+      final SparseFixedBitSet other = BitSetIterator.getSparseFixedBitSetOrNull(it);
+      if (other != null) {
+        assertUnpositioned(it);
+        or(other);
+        return;
+      }
     }
+
+    // We do not specialize the union with a FixedBitSet since FixedBitSets are
+    // supposed to be used for dense data and sparse fixed bit sets for sparse
+    // data, so a sparse set would likely get upgraded by DocIdSetBuilder before
+    // being or'ed with a FixedBitSet
+
+    if (it.cost() < indices.length) {
+      // the default impl is good for sparse iterators
+      super.or(it);
+    } else {
+      orDense(it);
+    }
+  }
+
+  // AND and AND_NOT do not need much specialization here since this sparse set
+  // is supposed to be used on sparse data and the default AND/AND_NOT impl
+  // (leap frog) is efficient when at least one of the sets contains sparse data
+
+  @Override
+  public void and(DocIdSetIterator it) throws IOException {
+    final SparseFixedBitSet other = BitSetIterator.getSparseFixedBitSetOrNull(it);
+    if (other != null) {
+      // if we are merging with another SparseFixedBitSet, a quick win is
+      // to clear up some blocks by only looking at their index. Then the set
+      // is sparser and the leap-frog approach of the parent class is more
+      // efficient. Since SparseFixedBitSet is supposed to be used for sparse
+      // sets, the intersection of two SparseFixedBitSet is likely very sparse
+      final int numCommonBlocks = Math.min(indices.length, other.indices.length);
+      for (int i = 0; i < numCommonBlocks; ++i) {
+        if ((indices[i] & other.indices[i]) == 0) {
+          this.nonZeroLongCount -= Long.bitCount(this.indices[i]);
+          this.indices[i] = 0;
+          this.bits[i] = null;
+        }
+      }
+    }
+    super.and(it);
   }
 
   @Override
@@ -355,8 +515,4 @@ public class SparseFixedBitSet extends BitSet implements Bits, Accountable {
     return ramBytesUsed;
   }
 
-  @Override
-  public Iterable<? extends Accountable> getChildResources() {
-    return Collections.emptyList();
-  }
 }

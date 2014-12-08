@@ -32,8 +32,8 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map.Entry;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -45,7 +45,6 @@ import org.apache.lucene.codecs.FieldInfosFormat;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.index.DocValuesUpdate.BinaryDocValuesUpdate;
 import org.apache.lucene.index.DocValuesUpdate.NumericDocValuesUpdate;
-import org.apache.lucene.index.FieldInfo.DocValuesType;
 import org.apache.lucene.index.FieldInfos.FieldNumbers;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.index.MergeState.CheckAbort;
@@ -406,7 +405,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
       synchronized (fullFlushLock) {
         boolean success = false;
         try {
-          anySegmentFlushed = docWriter.flushAllThreads(this);
+          anySegmentFlushed = docWriter.flushAllThreads();
           if (!anySegmentFlushed) {
             // prevent double increment since docWriter#doFlush increments the flushcount
             // if we flushed anything.
@@ -423,8 +422,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
               infoStream.message("IW", "return reader version=" + r.getVersion() + " reader=" + r);
             }
           }
-        } catch (OutOfMemoryError oom) {
-          tragicEvent(oom, "getReader");
+        } catch (AbortingException | OutOfMemoryError tragedy) {
+          tragicEvent(tragedy, "getReader");
           // never reached but javac disagrees:
           return null;
         } finally {
@@ -460,11 +459,6 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
   public final long ramBytesUsed() {
     ensureOpen();
     return docWriter.ramBytesUsed();
-  }
-  
-  @Override
-  public Iterable<? extends Accountable> getChildResources() {
-    return Collections.emptyList();
   }
 
   /** Holds shared SegmentReader instances. IndexWriter uses
@@ -1237,8 +1231,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
           }
         }
       }
-    } catch (OutOfMemoryError oom) {
-      tragicEvent(oom, "updateDocuments");
+    } catch (AbortingException | OutOfMemoryError tragedy) {
+      tragicEvent(tragedy, "updateDocuments");
     }
   }
 
@@ -1407,8 +1401,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
           }
         }
       }
-    } catch (OutOfMemoryError oom) {
-      tragicEvent(oom, "updateDocument");
+    } catch (AbortingException | OutOfMemoryError tragedy) {
+      tragicEvent(tragedy, "updateDocument");
     }
   }
 
@@ -1497,8 +1491,11 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
     DocValuesUpdate[] dvUpdates = new DocValuesUpdate[updates.length];
     for (int i = 0; i < updates.length; i++) {
       final Field f = updates[i];
-      final DocValuesType dvType = f.fieldType().docValueType();
+      final DocValuesType dvType = f.fieldType().docValuesType();
       if (dvType == null) {
+        throw new NullPointerException("DocValuesType cannot be null (field: \"" + f.name() + "\")");
+      }
+      if (dvType == DocValuesType.NONE) {
         throw new IllegalArgumentException("can only update NUMERIC or BINARY fields! field=" + f.name());
       }
       if (!globalFieldNumberMap.contains(f.name(), dvType)) {
@@ -1578,8 +1575,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
   final InfoStream infoStream;
 
   /**
-   * Forces merge policy to merge segments until there are <=
-   * maxNumSegments.  The actual merges to be
+   * Forces merge policy to merge segments until there are
+   * {@code <= maxNumSegments}.  The actual merges to be
    * executed are determined by the {@link MergePolicy}.
    *
    * <p>This is a horribly costly operation, especially when
@@ -1598,7 +1595,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
    * afterwards, to allow IndexWriter to free up disk space.</p>
    *
    * <p>If some but not all readers re-open while merging
-   * is underway, this will cause > 2X temporary
+   * is underway, this will cause {@code > 2X} temporary
    * space to be consumed as those new readers will then
    * hold open the temporary segments at that time.  It is
    * best not to re-open readers while merging is running.</p>
@@ -2538,7 +2535,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
       TrackingDirectoryWrapper trackingDir = new TrackingDirectoryWrapper(directory);
 
       SegmentInfo info = new SegmentInfo(directory, Version.LATEST, mergedName, -1,
-                                         false, codec, null, StringHelper.randomId());
+                                         false, codec, null, StringHelper.randomId(), new HashMap<>());
 
       SegmentMerger merger = new SegmentMerger(mergeReaders, info, infoStream, trackingDir,
                                                MergeState.CheckAbort.NONE, globalFieldNumberMap, 
@@ -2634,7 +2631,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
     // Same SI as before but we change directory and name
     SegmentInfo newInfo = new SegmentInfo(directory, info.info.getVersion(), segName, info.info.getDocCount(),
                                           info.info.getUseCompoundFile(), info.info.getCodec(), 
-                                          info.info.getDiagnostics(), info.info.getId());
+                                          info.info.getDiagnostics(), info.info.getId(), info.info.getAttributes());
     SegmentCommitInfo newInfoPerCommit = new SegmentCommitInfo(newInfo, info.getDelCount(), info.getDelGen(), 
                                                                info.getFieldInfosGen(), info.getDocValuesGen());
     
@@ -2726,7 +2723,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
           boolean flushSuccess = false;
           boolean success = false;
           try {
-            anySegmentsFlushed = docWriter.flushAllThreads(this);
+            anySegmentsFlushed = docWriter.flushAllThreads();
             if (!anySegmentsFlushed) {
               // prevent double increment since docWriter#doFlush increments the flushcount
               // if we flushed anything.
@@ -2769,8 +2766,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
             doAfterFlush();
           }
         }
-      } catch (OutOfMemoryError oom) {
-        tragicEvent(oom, "prepareCommit");
+      } catch (AbortingException | OutOfMemoryError tragedy) {
+        tragicEvent(tragedy, "prepareCommit");
       }
      
       boolean success = false;
@@ -2821,7 +2818,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
   private final Object commitLock = new Object();
 
   /**
-   * <p>Commits all pending changes (added & deleted
+   * <p>Commits all pending changes (added and deleted
    * documents, segment merges, added
    * indexes, etc.) to the index, and syncs all referenced
    * index files, such that a reader will see the changes
@@ -2833,7 +2830,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
    *
    * <p> Note that this operation calls Directory.sync on
    * the index files.  That call should not return until the
-   * file contents & metadata are on stable storage.  For
+   * file contents and metadata are on stable storage.  For
    * FSDirectory, this calls the OS's fsync.  But, beware:
    * some hardware devices may in fact cache writes even
    * during fsync, and return before the bits are actually
@@ -3011,7 +3008,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
       synchronized (fullFlushLock) {
       boolean flushSuccess = false;
         try {
-          anySegmentFlushed = docWriter.flushAllThreads(this);
+          anySegmentFlushed = docWriter.flushAllThreads();
           flushSuccess = true;
         } finally {
           docWriter.finishFullFlush(flushSuccess);
@@ -3028,8 +3025,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
         success = true;
         return anySegmentFlushed;
       }
-    } catch (OutOfMemoryError oom) {
-      tragicEvent(oom, "doFlush");
+    } catch (AbortingException | OutOfMemoryError tragedy) {
+      tragicEvent(tragedy, "doFlush");
       // never hit
       return false;
     } finally {
@@ -3745,7 +3742,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
     // ConcurrentMergePolicy we keep deterministic segment
     // names.
     final String mergeSegmentName = newSegmentName();
-    SegmentInfo si = new SegmentInfo(directory, Version.LATEST, mergeSegmentName, -1, false, codec, null, StringHelper.randomId());
+    SegmentInfo si = new SegmentInfo(directory, Version.LATEST, mergeSegmentName, -1, false, codec, null, StringHelper.randomId(), new HashMap<>());
     Map<String,String> details = new HashMap<>();
     details.put("mergeMaxNumSegments", "" + merge.maxNumSegments);
     details.put("mergeFactor", Integer.toString(merge.segments.size()));
@@ -3832,6 +3829,14 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
           }
         }
         merge.readers.set(i, null);
+      }
+    }
+
+    try {
+      merge.mergeFinished();
+    } catch (Throwable t) {
+      if (th == null) {
+        th = t;
       }
     }
     
@@ -4248,7 +4253,9 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
 
       synchronized(this) {
 
-        assert lastCommitChangeCount <= changeCount: "lastCommitChangeCount=" + lastCommitChangeCount + " changeCount=" + changeCount;
+        if (lastCommitChangeCount > changeCount) {
+          throw new IllegalStateException("lastCommitChangeCount=" + lastCommitChangeCount + ",changeCount=" + changeCount);
+        }
 
         if (pendingCommitChangeCount == lastCommitChangeCount) {
           if (infoStream.isEnabled("IW")) {
@@ -4350,17 +4357,6 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
     return directory.makeLock(WRITE_LOCK_NAME).isLocked();
   }
 
-  /**
-   * Forcibly unlocks the index in the named directory.
-   * <P>
-   * Caution: this should only be used by failure recovery code,
-   * when it is known that no other process nor thread is in fact
-   * currently accessing this index.
-   */
-  public static void unlock(Directory directory) throws IOException {
-    directory.makeLock(IndexWriter.WRITE_LOCK_NAME).close();
-  }
-
   /** If {@link DirectoryReader#open(IndexWriter,boolean)} has
    *  been called (ie, this writer is in near real-time
    *  mode), then after a merge completes, this class can be
@@ -4387,19 +4383,28 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
     public abstract void warm(LeafReader reader) throws IOException;
   }
 
-  private void tragicEvent(Throwable tragedy, String location) {
+  void tragicEvent(Throwable tragedy, String location) throws IOException {
+    // unbox our internal AbortingException
+    if (tragedy instanceof AbortingException) {
+      tragedy = tragedy.getCause();
+    }
     // We cannot hold IW's lock here else it can lead to deadlock:
     assert Thread.holdsLock(this) == false;
 
+    // How can it be a tragedy when nothing happened?
+    assert tragedy != null;
+
     if (infoStream.isEnabled("IW")) {
-      infoStream.message("IW", "hit " + tragedy.getClass().getSimpleName() + " inside " + location);
+      infoStream.message("IW", "hit tragic " + tragedy.getClass().getSimpleName() + " inside " + location);
     }
+
     synchronized (this) {
-      // its possible you could have a really bad day
+      // it's possible you could have a really bad day
       if (this.tragedy == null) {
         this.tragedy = tragedy;
       }
     }
+
     // if we are already closed (e.g. called by rollback), this will be a no-op.
     synchronized(commitLock) {
       if (closing == false) {
@@ -4411,7 +4416,8 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
         }
       }
     }
-    IOUtils.reThrowUnchecked(tragedy);
+
+    IOUtils.reThrow(tragedy);
   }
 
   // Used for testing.  Current points:
@@ -4434,10 +4440,13 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
   synchronized boolean nrtIsCurrent(SegmentInfos infos) {
     //System.out.println("IW.nrtIsCurrent " + (infos.version == segmentInfos.version && !docWriter.anyChanges() && !bufferedDeletesStream.any()));
     ensureOpen();
+    boolean isCurrent = infos.version == segmentInfos.version && !docWriter.anyChanges() && !bufferedUpdatesStream.any();
     if (infoStream.isEnabled("IW")) {
-      infoStream.message("IW", "nrtIsCurrent: infoVersion matches: " + (infos.version == segmentInfos.version) + "; DW changes: " + docWriter.anyChanges() + "; BD changes: "+ bufferedUpdatesStream.any());
+      if (isCurrent == false) {
+        infoStream.message("IW", "nrtIsCurrent: infoVersion matches: " + (infos.version == segmentInfos.version) + "; DW changes: " + docWriter.anyChanges() + "; BD changes: "+ bufferedUpdatesStream.any());
+      }
     }
-    return infos.version == segmentInfos.version && !docWriter.anyChanges() && !bufferedUpdatesStream.any();
+    return isCurrent;
   }
 
   synchronized boolean isClosed() {
@@ -4574,11 +4583,13 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable {
   }
   
   private boolean processEvents(Queue<Event> queue, boolean triggerMerge, boolean forcePurge) throws IOException {
-    Event event;
     boolean processed = false;
-    while((event = queue.poll()) != null)  {
-      processed = true;
-      event.process(this, triggerMerge, forcePurge);
+    if (tragedy == null) {
+      Event event;
+      while((event = queue.poll()) != null)  {
+        processed = true;
+        event.process(this, triggerMerge, forcePurge);
+      }
     }
     return processed;
   }

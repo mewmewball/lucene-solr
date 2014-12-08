@@ -29,7 +29,7 @@ import java.util.TreeMap;
 import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.index.DocsAndPositionsEnum;
 import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.IndexFileNames;
@@ -110,7 +110,7 @@ public class FSTOrdTermsReader extends FieldsProducer {
       final int numFields = blockIn.readVInt();
       for (int i = 0; i < numFields; i++) {
         FieldInfo fieldInfo = fieldInfos.fieldInfo(blockIn.readVInt());
-        boolean hasFreq = fieldInfo.getIndexOptions() != IndexOptions.DOCS_ONLY;
+        boolean hasFreq = fieldInfo.getIndexOptions() != IndexOptions.DOCS;
         long numTerms = blockIn.readVLong();
         long sumTotalTermFreq = hasFreq ? blockIn.readVLong() : -1;
         long sumDocFreq = blockIn.readVLong();
@@ -753,7 +753,7 @@ public class FSTOrdTermsReader extends FieldsProducer {
       }
 
       /** Load frame for target arc(node) on fst, so that 
-       *  arc.label >= label and !fsa.reject(arc.label) */
+       *  arc.label &gt;= label and !fsa.reject(arc.label) */
       Frame loadCeilFrame(int label, Frame top, Frame frame) throws IOException {
         FST.Arc<Long> arc = frame.arc;
         arc = Util.readCeilArc(label, fst, top.arc, arc, fstReader);

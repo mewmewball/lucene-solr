@@ -19,7 +19,6 @@ package org.apache.lucene.util.packed;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.index.NumericDocValues;
@@ -32,7 +31,7 @@ import org.apache.lucene.util.RamUsageEstimator;
 
 /**
  * Simplistic compression for array of unsigned long values.
- * Each value is >= 0 and <= a specified maximum value.  The
+ * Each value is {@code >= 0} and {@code <=} a specified maximum value.  The
  * values are stored as packed ints, with each value
  * consuming a fixed number of bits.
  *
@@ -478,11 +477,6 @@ public class PackedInts {
      * @return the number of values.
      */
     public abstract int size();
-
-    @Override
-    public Iterable<? extends Accountable> getChildResources() {
-      return Collections.emptyList();
-    }
   }
 
   /**

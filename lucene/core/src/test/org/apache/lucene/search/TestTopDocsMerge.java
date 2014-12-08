@@ -19,8 +19,11 @@ package org.apache.lucene.search;
 
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.FloatDocValuesField;
 import org.apache.lucene.document.FloatField;
 import org.apache.lucene.document.IntField;
+import org.apache.lucene.document.NumericDocValuesField;
+import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.CompositeReaderContext;
 import org.apache.lucene.index.IndexReader;
@@ -29,6 +32,7 @@ import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 
@@ -74,8 +78,7 @@ public class TestTopDocsMerge extends LuceneTestCase {
     IndexReader reader = null;
     Directory dir = null;
 
-    final int numDocs = atLeast(1000);
-    //final int numDocs = atLeast(50);
+    final int numDocs = TEST_NIGHTLY ? atLeast(1000) : atLeast(100);
 
     final String[] tokens = new String[] {"a", "b", "c", "d", "e"};
 
@@ -103,9 +106,9 @@ public class TestTopDocsMerge extends LuceneTestCase {
 
       for(int docIDX=0;docIDX<numDocs;docIDX++) {
         final Document doc = new Document();
-        doc.add(newStringField("string", TestUtil.randomRealisticUnicodeString(random()), Field.Store.NO));
+        doc.add(new SortedDocValuesField("string", new BytesRef(TestUtil.randomRealisticUnicodeString(random()))));
         doc.add(newTextField("text", content[random().nextInt(content.length)], Field.Store.NO));
-        doc.add(new FloatField("float", random().nextFloat(), Field.Store.NO));
+        doc.add(new FloatDocValuesField("float", random().nextFloat()));
         final int intValue;
         if (random().nextInt(100) == 17) {
           intValue = Integer.MIN_VALUE;
@@ -114,7 +117,7 @@ public class TestTopDocsMerge extends LuceneTestCase {
         } else {
           intValue = random().nextInt();
         }
-        doc.add(new IntField("int", intValue, Field.Store.NO));
+        doc.add(new NumericDocValuesField("int", intValue));
         if (VERBOSE) {
           System.out.println("  doc=" + doc);
         }
@@ -164,7 +167,8 @@ public class TestTopDocsMerge extends LuceneTestCase {
     sortFields.add(new SortField(null, SortField.Type.DOC, true));
     sortFields.add(new SortField(null, SortField.Type.DOC, false));
 
-    for(int iter=0;iter<1000*RANDOM_MULTIPLIER;iter++) {
+    int numIters = atLeast(300); 
+    for(int iter=0;iter<numIters;iter++) {
 
       // TODO: custom FieldComp...
       final Query query = new TermQuery(new Term("text", tokens[random().nextInt(tokens.length)]));

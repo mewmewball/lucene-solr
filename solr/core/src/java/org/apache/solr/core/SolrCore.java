@@ -17,6 +17,43 @@
 
 package org.apache.solr.core;
 
+import java.io.Closeable;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Writer;
+import java.lang.reflect.Constructor;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.NoSuchFileException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.StringTokenizer;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.index.DirectoryReader;
@@ -40,6 +77,7 @@ import org.apache.solr.common.util.SimpleOrderedMap;
 import org.apache.solr.core.DirectoryFactory.DirContext;
 import org.apache.solr.handler.RequestHandlerBase;
 import org.apache.solr.handler.SnapPuller;
+import org.apache.solr.handler.SolrConfigHandler;
 import org.apache.solr.handler.UpdateRequestHandler;
 import org.apache.solr.handler.admin.ShowFileRequestHandler;
 import org.apache.solr.handler.component.DebugComponent;
@@ -102,43 +140,6 @@ import org.slf4j.LoggerFactory;
 import org.xml.sax.SAXException;
 
 import javax.xml.parsers.ParserConfigurationException;
-
-import java.io.Closeable;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Writer;
-import java.lang.reflect.Constructor;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.NoSuchFileException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.IdentityHashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
-import java.util.StringTokenizer;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  *
@@ -422,18 +423,21 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
     return responseWriters.put(name, responseWriter);
   }
 
-  public SolrCore reload(ConfigSet coreConfig, SolrCore prev) throws IOException,
+  public SolrCore reload(ConfigSet coreConfig) throws IOException,
       ParserConfigurationException, SAXException {
     
     solrCoreState.increfSolrCoreState();
+    SolrCore currentCore;
     boolean indexDirChange = !getNewIndexDir().equals(getIndexDir());
     if (indexDirChange || !coreConfig.getSolrConfig().nrtMode) {
       // the directory is changing, don't pass on state
-      prev = null;
+      currentCore = null;
+    } else {
+      currentCore = this;
     }
     
     SolrCore core = new SolrCore(getName(), getDataDir(), coreConfig.getSolrConfig(),
-        coreConfig.getIndexSchema(), coreDescriptor, updateHandler, this.solrDelPolicy, prev);
+        coreConfig.getIndexSchema(), coreDescriptor, updateHandler, this.solrDelPolicy, currentCore);
     core.solrDelPolicy = this.solrDelPolicy;
     
 
@@ -506,7 +510,7 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
                   logid
                       + "WARNING: Solr index directory '{}' is locked.  Unlocking...",
                   indexDir);
-              IndexWriter.unlock(dir);
+              dir.makeLock(IndexWriter.WRITE_LOCK_NAME).close();              
             } else {
               log.error(logid
                   + "Solr index directory '{}' is locked.  Throwing exception",
@@ -806,9 +810,7 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
       // Processors initialized before the handlers
       updateProcessorChains = loadUpdateProcessorChains();
       reqHandlers = new RequestHandlers(this);
-      List<PluginInfo> implicitReqHandlerInfo = new ArrayList<>();
-      UpdateRequestHandler.addImplicits(implicitReqHandlerInfo);
-      reqHandlers.initHandlersFromConfig(solrConfig, implicitReqHandlerInfo);
+      reqHandlers.initHandlersFromConfig(solrConfig);
 
       // Handle things that should eventually go away
       initDeprecatedSupport();
@@ -1065,14 +1067,6 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
     }
 
 
-    try {
-      infoRegistry.clear();
-    } catch (Throwable e) {
-      SolrException.log(log, e);
-      if (e instanceof Error) {
-        throw (Error) e;
-      }
-    }
 
     try {
       if (null != updateHandler) {
@@ -1121,6 +1115,15 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
       closeSearcher();
     } catch (Throwable e) {
       SolrException.log(log,e);
+      if (e instanceof Error) {
+        throw (Error) e;
+      }
+    }
+
+    try {
+      infoRegistry.clear();
+    } catch (Throwable e) {
+      SolrException.log(log, e);
       if (e instanceof Error) {
         throw (Error) e;
       }

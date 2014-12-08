@@ -17,6 +17,7 @@ package org.apache.lucene.util;
  * limitations under the License.
  */
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,6 +26,7 @@ import java.io.PrintStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.CharBuffer;
+import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -62,17 +64,17 @@ import org.apache.lucene.document.IntField;
 import org.apache.lucene.document.LongField;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedDocValuesField;
-import org.apache.lucene.index.FilterLeafReader;
-import org.apache.lucene.index.LeafReader;
-import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.CheckIndex;
 import org.apache.lucene.index.ConcurrentMergeScheduler;
+import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.DocsAndPositionsEnum;
 import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo.DocValuesType;
+import org.apache.lucene.index.FilterLeafReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexableField;
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.LogMergePolicy;
 import org.apache.lucene.index.MergePolicy;
 import org.apache.lucene.index.MergeScheduler;
@@ -81,12 +83,16 @@ import org.apache.lucene.index.SegmentReader;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.index.TieredMergePolicy;
+import org.apache.lucene.mockfile.FilterFileSystem;
+import org.apache.lucene.mockfile.WindowsFS;
 import org.apache.lucene.search.FieldDoc;
-import org.apache.lucene.search.FilteredQuery;
 import org.apache.lucene.search.FilteredQuery.FilterStrategy;
+import org.apache.lucene.search.FilteredQuery;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.store.FilterDirectory;
 import org.apache.lucene.store.NoLockFactory;
 import org.junit.Assert;
 
@@ -107,6 +113,7 @@ public final class TestUtil {
    * Closes the given InputStream after extracting! 
    */
   public static void unzip(InputStream in, Path destDir) throws IOException {
+    in = new BufferedInputStream(in);
     IOUtils.rm(destDir);
     Files.createDirectory(destDir);
 
@@ -216,9 +223,9 @@ public final class TestUtil {
    *  look for any other corruption.  */
   public static CheckIndex.Status checkIndex(Directory dir, boolean crossCheckTermVectors, boolean failFast) throws IOException {
     ByteArrayOutputStream bos = new ByteArrayOutputStream(1024);
-    // TODO: actually use the dir's lock factory, unless test uses a special method?
+    // TODO: actually use the dir's locking, unless test uses a special method?
     // some tests e.g. exception tests become much more complicated if they have to close the writer
-    try (CheckIndex checker = new CheckIndex(dir, NoLockFactory.getNoLockFactory().makeLock("bogus"))) {
+    try (CheckIndex checker = new CheckIndex(dir, NoLockFactory.INSTANCE.makeLock(dir, "bogus"))) {
       checker.setCrossCheckTermVectors(crossCheckTermVectors);
       checker.setFailFast(failFast);
       checker.setInfoStream(new PrintStream(bos, false, IOUtils.UTF_8), false);
@@ -888,16 +895,16 @@ public final class TestUtil {
     for(IndexableField f : doc1.getFields()) {
       final Field field1 = (Field) f;
       final Field field2;
-      final DocValuesType dvType = field1.fieldType().docValueType();
+      final DocValuesType dvType = field1.fieldType().docValuesType();
       final NumericType numType = field1.fieldType().numericType();
-      if (dvType != null) {
+      if (dvType != DocValuesType.NONE) {
         switch(dvType) {
           case NUMERIC:
             field2 = new NumericDocValuesField(field1.name(), field1.numericValue().longValue());
             break;
           case BINARY:
             field2 = new BinaryDocValuesField(field1.name(), field1.binaryValue());
-          break;
+            break;
           case SORTED:
             field2 = new SortedDocValuesField(field1.name(), field1.binaryValue());
             break;
@@ -1141,6 +1148,35 @@ public final class TestUtil {
       return mixedUp;
     } else {
       return sb.toString();
+    }
+  }
+
+  /** Returns true if this is an FSDirectory backed by {@link WindowsFS}. */
+  public static boolean isWindowsFS(Directory dir) {
+    // First unwrap directory to see if there is an FSDir:
+    while (true) {
+      if (dir instanceof FSDirectory) {
+        return isWindowsFS(((FSDirectory) dir).getDirectory());
+      } else if (dir instanceof FilterDirectory) {
+        dir = ((FilterDirectory) dir).getDelegate();
+      } else {
+        return false;
+      }
+    }
+  }
+
+  /** Returns true if this Path is backed by {@link WindowsFS}. */
+  public static boolean isWindowsFS(Path path) {
+    FileSystem fs = path.getFileSystem();
+    while (true) {
+      if (fs instanceof FilterFileSystem) {
+        if (((FilterFileSystem) fs).getParent() instanceof WindowsFS) {
+          return true;
+        }
+        fs = ((FilterFileSystem) fs).getDelegate();
+      } else {
+        return false;
+      }
     }
   }
   

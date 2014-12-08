@@ -35,10 +35,10 @@ import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.TermStats;
 import org.apache.lucene.index.DocsAndPositionsEnum;
 import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.IndexFileNames;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.Terms;
@@ -129,11 +129,6 @@ public final class RAMOnlyPostingsFormat extends PostingsFormat {
     }
 
     @Override
-    public Iterable<? extends Accountable> getChildResources() {
-      return Collections.emptyList();
-    }
-
-    @Override
     public long size() {
       return termToDocs.size();
     }
@@ -142,7 +137,7 @@ public final class RAMOnlyPostingsFormat extends PostingsFormat {
     public long getSumTotalTermFreq() {
       return sumTotalTermFreq;
     }
-      
+
     @Override
     public long getSumDocFreq() throws IOException {
       return sumDocFreq;
@@ -195,11 +190,6 @@ public final class RAMOnlyPostingsFormat extends PostingsFormat {
       }
       return sizeInBytes;
     }
-
-    @Override
-    public Iterable<? extends Accountable> getChildResources() {
-      return Collections.emptyList();
-    }
   }
 
   static class RAMDoc implements Accountable {
@@ -223,11 +213,6 @@ public final class RAMOnlyPostingsFormat extends PostingsFormat {
         }
       }
       return sizeInBytes;
-    }
-    
-    @Override
-    public Iterable<? extends Accountable> getChildResources() {
-      return Collections.emptyList();
     }
   }
 

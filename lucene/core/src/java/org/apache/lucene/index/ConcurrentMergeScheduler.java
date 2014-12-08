@@ -162,7 +162,7 @@ public class ConcurrentMergeScheduler extends MergeScheduler {
   };
 
   /**
-   * Called whenever the running merges have changed, to pause & unpause
+   * Called whenever the running merges have changed, to pause and unpause
    * threads. This method sorts the merge threads by their merge size in
    * descending order and then pauses/unpauses threads from first to last --
    * that way, smaller merges are guaranteed to run before larger ones.
@@ -300,8 +300,11 @@ public class ConcurrentMergeScheduler extends MergeScheduler {
   protected synchronized int mergeThreadCount() {
     int count = 0;
     for (MergeThread mt : mergeThreads) {
-      if (mt.isAlive() && mt.getCurrentMerge() != null) {
-        count++;
+      if (mt.isAlive()) {
+        MergePolicy.OneMerge merge = mt.getCurrentMerge();
+        if (merge != null && merge.isAborted() == false) {
+          count++;
+        }
       }
     }
     return count;
@@ -334,33 +337,7 @@ public class ConcurrentMergeScheduler extends MergeScheduler {
     // pending merges, until it's empty:
     while (true) {
 
-      long startStallTime = 0;
-      while (writer.hasPendingMerges() && mergeThreadCount() >= maxMergeCount) {
-        // This means merging has fallen too far behind: we
-        // have already created maxMergeCount threads, and
-        // now there's at least one more merge pending.
-        // Note that only maxThreadCount of
-        // those created merge threads will actually be
-        // running; the rest will be paused (see
-        // updateMergeThreads).  We stall this producer
-        // thread to prevent creation of new segments,
-        // until merging has caught up:
-        startStallTime = System.currentTimeMillis();
-        if (verbose()) {
-          message("    too many merges; stalling...");
-        }
-        try {
-          wait();
-        } catch (InterruptedException ie) {
-          throw new ThreadInterruptedException(ie);
-        }
-      }
-
-      if (verbose()) {
-        if (startStallTime != 0) {
-          message("  stalled for " + (System.currentTimeMillis()-startStallTime) + " msec");
-        }
-      }
+      maybeStall();
 
       MergePolicy.OneMerge merge = writer.getNextMerge();
       if (merge == null) {
@@ -396,6 +373,45 @@ public class ConcurrentMergeScheduler extends MergeScheduler {
         if (!success) {
           writer.mergeFinish(merge);
         }
+      }
+    }
+  }
+
+  /** This is invoked by {@link #merge} to possibly stall the incoming
+   *  thread when there are too many merges running or pending.  The 
+   *  default behavior is to force this thread, which is producing too
+   *  many segments for merging to keep up, to wait until merges catch
+   *  up. Applications that can take other less drastic measures, such
+   *  as limiting how many threads are allowed to index, can do nothing
+   *  here and throttle elsewhere. */
+
+  protected synchronized void maybeStall() {
+    long startStallTime = 0;
+    while (writer.hasPendingMerges() && mergeThreadCount() >= maxMergeCount) {
+      // This means merging has fallen too far behind: we
+      // have already created maxMergeCount threads, and
+      // now there's at least one more merge pending.
+      // Note that only maxThreadCount of
+      // those created merge threads will actually be
+      // running; the rest will be paused (see
+      // updateMergeThreads).  We stall this producer
+      // thread to prevent creation of new segments,
+      // until merging has caught up:
+      startStallTime = System.currentTimeMillis();
+      if (verbose()) {
+        message("    too many merges; stalling...");
+      }
+      try {
+        // Only wait 0.25 seconds, so if all merges are aborted (by IW.rollback) we notice:
+        wait(250);
+      } catch (InterruptedException ie) {
+        throw new ThreadInterruptedException(ie);
+      }
+    }
+
+    if (verbose()) {
+      if (startStallTime != 0) {
+        message("  stalled for " + (System.currentTimeMillis()-startStallTime) + " msec");
       }
     }
   }

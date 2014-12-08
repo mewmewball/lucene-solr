@@ -33,7 +33,6 @@ import java.util.Map;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.index.CheckIndex.Status.DocValuesStatus;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.store.Directory;
@@ -52,7 +51,6 @@ import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LongBitSet;
 import org.apache.lucene.util.StringHelper;
 import org.apache.lucene.util.Version;
-
 
 /**
  * Basic tool and API to check the health of an index and
@@ -884,11 +882,6 @@ public class CheckIndex implements Closeable {
     final Status.TermIndexStatus status = new Status.TermIndexStatus();
     int computedFieldCount = 0;
     
-    if (fields == null) {
-      msg(infoStream, "OK [no fields/terms]");
-      return status;
-    }
-    
     DocsEnum docs = null;
     DocsEnum docsAndFreqs = null;
     DocsAndPositionsEnum postings = null;
@@ -907,7 +900,7 @@ public class CheckIndex implements Closeable {
       if (fieldInfo == null) {
         throw new RuntimeException("fieldsEnum inconsistent with fieldInfos, no fieldInfos for: " + field);
       }
-      if (!fieldInfo.isIndexed()) {
+      if (fieldInfo.getIndexOptions() == IndexOptions.NONE) {
         throw new RuntimeException("fieldsEnum inconsistent with fieldInfos, isIndexed == false for: " + field);
       }
       
@@ -1536,7 +1529,7 @@ public class CheckIndex implements Closeable {
         infoStream.print("    test: docvalues...........");
       }
       for (FieldInfo fieldInfo : reader.getFieldInfos()) {
-        if (fieldInfo.hasDocValues()) {
+        if (fieldInfo.getDocValuesType() != DocValuesType.NONE) {
           status.totalValueFields++;
           checkDocValues(fieldInfo, reader, infoStream, status);
         } else {

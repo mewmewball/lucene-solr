@@ -19,7 +19,6 @@ package org.apache.lucene.util;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 
 import org.apache.lucene.search.DocIdSet;
 import org.apache.lucene.search.DocIdSetIterator;
@@ -131,11 +130,6 @@ public final class FixedBitSet extends BitSet implements MutableBits, Accountabl
     return BASE_RAM_BYTES_USED + RamUsageEstimator.sizeOf(bits);
   }
 
-  @Override
-  public Iterable<? extends Accountable> getChildResources() {
-    return Collections.emptyList();
-  }
-
   /** Expert. */
   public long[] getBits() {
     return bits;
@@ -209,9 +203,7 @@ public final class FixedBitSet extends BitSet implements MutableBits, Accountabl
     return DocIdSetIterator.NO_MORE_DOCS;
   }
 
-  /** Returns the index of the last set bit before or on the index specified.
-   *  -1 is returned if there are no more set bits.
-   */
+  @Override
   public int prevSetBit(int index) {
     assert index >= 0 && index < numBits: "index=" + index + " numBits=" + numBits;
     int i = index >> 6;
@@ -234,12 +226,10 @@ public final class FixedBitSet extends BitSet implements MutableBits, Accountabl
 
   @Override
   public void or(DocIdSetIterator iter) throws IOException {
-    if (BitSetIterator.getFixedBitSetOrNull(iter) != null && iter.docID() == -1) {
+    if (BitSetIterator.getFixedBitSetOrNull(iter) != null) {
+      assertUnpositioned(iter);
       final FixedBitSet bits = BitSetIterator.getFixedBitSetOrNull(iter); 
       or(bits);
-      // advance after last doc that would be accepted if standard
-      // iteration is used (to exhaust it):
-      iter.advance(numBits);
     } else {
       super.or(iter);
     }
@@ -266,12 +256,10 @@ public final class FixedBitSet extends BitSet implements MutableBits, Accountabl
   
   /** Does in-place XOR of the bits provided by the iterator. */
   public void xor(DocIdSetIterator iter) throws IOException {
-    if (BitSetIterator.getFixedBitSetOrNull(iter) != null && iter.docID() == -1) {
+    assertUnpositioned(iter);
+    if (BitSetIterator.getFixedBitSetOrNull(iter) != null) {
       final FixedBitSet bits = BitSetIterator.getFixedBitSetOrNull(iter); 
       xor(bits);
-      // advance after last doc that would be accepted if standard
-      // iteration is used (to exhaust it):
-      iter.advance(numBits);
     } else {
       int doc;
       while ((doc = iter.nextDoc()) < numBits) {
@@ -291,12 +279,10 @@ public final class FixedBitSet extends BitSet implements MutableBits, Accountabl
 
   @Override
   public void and(DocIdSetIterator iter) throws IOException {
-    if (BitSetIterator.getFixedBitSetOrNull(iter) != null && iter.docID() == -1) {
+    if (BitSetIterator.getFixedBitSetOrNull(iter) != null) {
+      assertUnpositioned(iter);
       final FixedBitSet bits = BitSetIterator.getFixedBitSetOrNull(iter); 
       and(bits);
-      // advance after last doc that would be accepted if standard
-      // iteration is used (to exhaust it):
-      iter.advance(numBits);
     } else {
       super.and(iter);
     }
@@ -329,12 +315,10 @@ public final class FixedBitSet extends BitSet implements MutableBits, Accountabl
 
   @Override
   public void andNot(DocIdSetIterator iter) throws IOException {
-    if (BitSetIterator.getFixedBitSetOrNull(iter) != null && iter.docID() == -1) {
+    if (BitSetIterator.getFixedBitSetOrNull(iter) != null) {
+      assertUnpositioned(iter);
       final FixedBitSet bits = BitSetIterator.getFixedBitSetOrNull(iter); 
       andNot(bits);
-      // advance after last doc that would be accepted if standard
-      // iteration is used (to exhaust it):
-      iter.advance(numBits);
     } else {
       super.andNot(iter);
     }

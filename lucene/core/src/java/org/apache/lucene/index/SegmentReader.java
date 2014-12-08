@@ -25,14 +25,12 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.lucene.codecs.Codec;
-import org.apache.lucene.codecs.DocValuesFormat;
 import org.apache.lucene.codecs.DocValuesProducer;
 import org.apache.lucene.codecs.FieldInfosFormat;
 import org.apache.lucene.codecs.FieldsProducer;
 import org.apache.lucene.codecs.NormsProducer;
 import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.codecs.TermVectorsReader;
-import org.apache.lucene.index.FieldInfo.DocValuesType;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.util.Accountable;
@@ -160,15 +158,14 @@ public final class SegmentReader extends LeafReader implements Accountable {
    */
   private DocValuesProducer initDocValuesProducer() throws IOException {
     final Directory dir = core.cfsReader != null ? core.cfsReader : si.info.dir;
-    final DocValuesFormat dvFormat = si.info.getCodec().docValuesFormat();
 
     if (!fieldInfos.hasDocValues()) {
       return null;
     } else if (si.hasFieldUpdates()) {
-      return new SegmentDocValuesProducer(si, dir, fieldInfos, segDocValues, dvFormat);
+      return new SegmentDocValuesProducer(si, dir, core.coreFieldInfos, fieldInfos, segDocValues);
     } else {
       // simple case, no DocValues updates
-      return segDocValues.getDocValuesProducer(-1L, si, IOContext.READ, dir, dvFormat, fieldInfos);
+      return segDocValues.getDocValuesProducer(-1L, si, dir, fieldInfos);
     }
   }
   
@@ -340,7 +337,7 @@ public final class SegmentReader extends LeafReader implements Accountable {
       // Field does not exist
       return null;
     }
-    if (fi.getDocValuesType() == null) {
+    if (fi.getDocValuesType() == DocValuesType.NONE) {
       // Field was not indexed with doc values
       return null;
     }
@@ -385,7 +382,7 @@ public final class SegmentReader extends LeafReader implements Accountable {
         // Field does not exist
         return null;
       }
-      if (fi.getDocValuesType() == null) {
+      if (fi.getDocValuesType() == DocValuesType.NONE) {
         // Field was not indexed with doc values
         return null;
       }
@@ -506,9 +503,7 @@ public final class SegmentReader extends LeafReader implements Accountable {
   public Iterable<? extends Accountable> getChildResources() {
     ensureOpen();
     List<Accountable> resources = new ArrayList<>();
-    if (core.fields != null) {
-      resources.add(Accountables.namedAccountable("postings", core.fields));
-    }
+    resources.add(Accountables.namedAccountable("postings", core.fields));
     if (core.normsProducer != null) {
       resources.add(Accountables.namedAccountable("norms", core.normsProducer));
     }

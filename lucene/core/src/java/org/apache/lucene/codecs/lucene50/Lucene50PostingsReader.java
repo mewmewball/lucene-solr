@@ -17,6 +17,27 @@ package org.apache.lucene.codecs.lucene50;
  * limitations under the License.
  */
 
+import java.io.IOException;
+import java.util.Arrays;
+
+import org.apache.lucene.codecs.BlockTermState;
+import org.apache.lucene.codecs.CodecUtil;
+import org.apache.lucene.codecs.PostingsReaderBase;
+import org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.IntBlockTermState;
+import org.apache.lucene.index.DocsAndPositionsEnum;
+import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.IndexFileNames;
+import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.index.SegmentReadState;
+import org.apache.lucene.store.DataInput;
+import org.apache.lucene.store.IndexInput;
+import org.apache.lucene.util.ArrayUtil;
+import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.IOUtils;
+import org.apache.lucene.util.RamUsageEstimator;
+
 import static org.apache.lucene.codecs.lucene50.ForUtil.MAX_DATA_SIZE;
 import static org.apache.lucene.codecs.lucene50.ForUtil.MAX_ENCODED_SIZE;
 import static org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.BLOCK_SIZE;
@@ -27,29 +48,6 @@ import static org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.POS_CODEC
 import static org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.TERMS_CODEC;
 import static org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.VERSION_CURRENT;
 import static org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.VERSION_START;
-
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collections;
-
-import org.apache.lucene.codecs.BlockTermState;
-import org.apache.lucene.codecs.CodecUtil;
-import org.apache.lucene.codecs.PostingsReaderBase;
-import org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat.IntBlockTermState;
-import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
-import org.apache.lucene.index.IndexFileNames;
-import org.apache.lucene.index.SegmentReadState;
-import org.apache.lucene.store.DataInput;
-import org.apache.lucene.store.IndexInput;
-import org.apache.lucene.util.Accountable;
-import org.apache.lucene.util.ArrayUtil;
-import org.apache.lucene.util.Bits;
-import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.RamUsageEstimator;
 
 /**
  * Concrete class that reads docId(maybe frq,pos,offset,payloads) list
@@ -65,7 +63,7 @@ public final class Lucene50PostingsReader extends PostingsReaderBase {
   private final IndexInput posIn;
   private final IndexInput payIn;
 
-  private final ForUtil forUtil;
+  final ForUtil forUtil;
   private int version;
 
   /** Sole constructor. */
@@ -1301,11 +1299,6 @@ public final class Lucene50PostingsReader extends PostingsReaderBase {
   @Override
   public long ramBytesUsed() {
     return BASE_RAM_BYTES_USED;
-  }
-  
-  @Override
-  public Iterable<? extends Accountable> getChildResources() {
-    return Collections.emptyList();
   }
 
   @Override

@@ -48,7 +48,6 @@ import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.PhraseQuery;
@@ -58,15 +57,17 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
-import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.store.MockDirectoryWrapper.FakeIOException;
+import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.InfoStream;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
+import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 
+@SuppressCodecs("SimpleText") // too slow here
 public class TestIndexWriterExceptions extends LuceneTestCase {
 
   private static class DocCopyIterator implements Iterable<Document> {
@@ -574,8 +575,7 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
     }
   }
 
-  // LUCENE-1072: make sure an errant exception on flushing
-  // one segment only takes out those docs in that one flush
+  // make sure an aborting exception closes the writer:
   public void testDocumentsWriterAbort() throws IOException {
     MockDirectoryWrapper dir = newMockDirectory();
     FailOnlyOnFlush failure = new FailOnlyOnFlush();
@@ -588,20 +588,18 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
     String contents = "aa bb cc dd ee ff gg hh ii jj kk";
     doc.add(newTextField("content", contents, Field.Store.NO));
     boolean hitError = false;
-    for(int i=0;i<200;i++) {
-      try {
-        writer.addDocument(doc);
-      } catch (IOException ioe) {
-        // only one flush should fail:
-        assertFalse(hitError);
-        hitError = true;
-      }
+    writer.addDocument(doc);
+    try {
+      writer.addDocument(doc);
+      fail("did not hit exception");
+    } catch (IOException ioe) {
+      // only one flush should fail:
+      assertFalse(hitError);
+      hitError = true;
+      assertTrue(writer.deleter.isClosed());
+      assertTrue(writer.isClosed());
     }
-    assertTrue(hitError);
-    writer.close();
-    IndexReader reader = DirectoryReader.open(dir);
-    assertEquals(198, reader.docFreq(new Term("content", "aa")));
-    reader.close();
+    assertFalse(DirectoryReader.indexExists(dir));
     dir.close();
   }
 
@@ -1264,6 +1262,7 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
         new FailOnTermVectors(FailOnTermVectors.AFTER_INIT_STAGE),
         new FailOnTermVectors(FailOnTermVectors.INIT_STAGE), };
     int num = atLeast(1);
+    iters:
     for (int j = 0; j < num; j++) {
       for (FailOnTermVectors failure : failures) {
         MockDirectoryWrapper dir = newMockDirectory();
@@ -1272,14 +1271,19 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
         int numDocs = 10 + random().nextInt(30);
         for (int i = 0; i < numDocs; i++) {
           Document doc = new Document();
+          // random TV
           Field field = newTextField(random(), "field", "a field", Field.Store.YES);
           doc.add(field);
-          // random TV
           try {
             w.addDocument(doc);
             assertFalse(field.fieldType().storeTermVectors());
           } catch (RuntimeException e) {
             assertTrue(e.getMessage().startsWith(FailOnTermVectors.EXC_MSG));
+            // This is an aborting exception, so writer is closed:
+            assertTrue(w.deleter.isClosed());
+            assertTrue(w.isClosed());
+            dir.close();
+            continue iters;
           }
           if (random().nextInt(20) == 0) {
             w.commit();
@@ -1896,11 +1900,19 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
       
       @Override
       public void eval(MockDirectoryWrapper dir) throws IOException {
-        StackTraceElement[] trace = new Exception().getStackTrace();
         if (shouldFail.get() == false) {
+          // Only sometimes throw the exc, so we get
+          // it sometimes on creating the file, on
+          // flushing buffer, on closing the file:
           return;
         }
         
+        if (random().nextInt(3) != 2) {
+          return;
+        }
+
+        StackTraceElement[] trace = Thread.currentThread().getStackTrace();
+
         boolean sawSeal = false;
         boolean sawWrite = false;
         for (int i = 0; i < trace.length; i++) {
@@ -1915,10 +1927,7 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
         
         // Don't throw exc if we are "flushing", else
         // the segment is aborted and docs are lost:
-        if (sawWrite && sawSeal == false && random().nextInt(3) == 2) {
-          // Only sometimes throw the exc, so we get
-          // it sometimes on creating the file, on
-          // flushing buffer, on closing the file:
+        if (sawWrite && sawSeal == false) {
           if (VERBOSE) {
             System.out.println("TEST: now fail; thread=" + Thread.currentThread().getName() + " exc:");
             new Throwable().printStackTrace(System.out);
@@ -2234,8 +2243,11 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
         
         @Override
         public void eval(MockDirectoryWrapper dir) throws IOException {
+          if (random().nextInt(10) != 0) {
+            return;
+          }
           boolean maybeFail = false;
-          StackTraceElement[] trace = new Exception().getStackTrace();
+          StackTraceElement[] trace = Thread.currentThread().getStackTrace();
           
           for (int i = 0; i < trace.length; i++) {
             if ("rollbackInternal".equals(trace[i].getMethodName())) {
@@ -2244,7 +2256,7 @@ public class TestIndexWriterExceptions extends LuceneTestCase {
             }
           }
           
-          if (maybeFail && random().nextInt(10) == 0) {
+          if (maybeFail) {
             if (VERBOSE) {
               System.out.println("TEST: now fail; thread=" + Thread.currentThread().getName() + " exc:");
               new Throwable().printStackTrace(System.out);

@@ -29,9 +29,9 @@ import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.lucene50.Lucene50PostingsFormat; // javadocs
 import org.apache.lucene.index.DocsAndPositionsEnum;
 import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.Fields;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.OrdTermState;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
@@ -56,9 +56,9 @@ import org.apache.lucene.util.automaton.Transition;
 
 /** Wraps {@link Lucene50PostingsFormat} format for on-disk
  *  storage, but then at read time loads and stores all
- *  terms & postings directly in RAM as byte[], int[].
+ *  terms and postings directly in RAM as byte[], int[].
  *
- *  <p><b><font color=red>WARNING</font></b>: This is
+ *  <p><b>WARNING</b>: This is
  *  exceptionally RAM intensive: it makes no effort to
  *  compress the postings data, storing terms as separate
  *  byte[] and postings as separate int[], but as a result it 
@@ -91,7 +91,7 @@ public final class DirectPostingsFormat extends PostingsFormat {
   
   /** minSkipCount is how many terms in a row must have the
    *  same prefix before we put a skip pointer down.  Terms
-   *  with docFreq <= lowFreqCutoff will use a single int[]
+   *  with docFreq &lt;= lowFreqCutoff will use a single int[]
    *  to hold all docs, freqs, position and offsets; terms
    *  with higher docFreq will use separate arrays. */
   public DirectPostingsFormat(int minSkipCount, int lowFreqCutoff) {
@@ -208,11 +208,6 @@ public final class DirectPostingsFormat extends PostingsFormat {
             ((postings!=null) ? RamUsageEstimator.sizeOf(postings) : 0) + 
             ((payloads!=null) ? RamUsageEstimator.sizeOf(payloads) : 0);
       }
-
-      @Override
-      public Iterable<? extends Accountable> getChildResources() {
-        return Collections.emptyList();
-      }
     }
 
     // TODO: maybe specialize into prx/no-prx/no-frq cases?
@@ -260,11 +255,6 @@ public final class DirectPostingsFormat extends PostingsFormat {
          }
          
          return sizeInBytes;
-      }
-      
-      @Override
-      public Iterable<? extends Accountable> getChildResources() {
-        return Collections.emptyList();
       }
     }
 
@@ -327,7 +317,7 @@ public final class DirectPostingsFormat extends PostingsFormat {
 
       this.minSkipCount = minSkipCount;
 
-      hasFreq = fieldInfo.getIndexOptions().compareTo(IndexOptions.DOCS_ONLY) > 0;
+      hasFreq = fieldInfo.getIndexOptions().compareTo(IndexOptions.DOCS) > 0;
       hasPos = fieldInfo.getIndexOptions().compareTo(IndexOptions.DOCS_AND_FREQS) > 0;
       hasOffsets = fieldInfo.getIndexOptions().compareTo(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS) > 0;
       hasPayloads = fieldInfo.hasPayloads();
@@ -542,11 +532,6 @@ public final class DirectPostingsFormat extends PostingsFormat {
       }
       
       return sizeInBytes;
-    }
-    
-    @Override
-    public Iterable<? extends Accountable> getChildResources() {
-      return Collections.emptyList();
     }
 
     @Override

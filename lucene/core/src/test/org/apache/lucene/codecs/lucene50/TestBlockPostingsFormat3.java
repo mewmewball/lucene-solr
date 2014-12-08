@@ -32,18 +32,18 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.LeafReader;
-import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
-import org.apache.lucene.index.IndexWriterConfig.OpenMode;
-import org.apache.lucene.index.TermsEnum.SeekStatus;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.DocsAndPositionsEnum;
 import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum.SeekStatus;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.Directory;
@@ -61,7 +61,8 @@ import org.apache.lucene.util.automaton.RegExp;
  * Tests partial enumeration (only pulling a subset of the indexed data) 
  */
 public class TestBlockPostingsFormat3 extends LuceneTestCase {
-  static final int MAXDOC = Lucene50PostingsFormat.BLOCK_SIZE * 20;
+  private final int MAXDOC = TEST_NIGHTLY ? Lucene50PostingsFormat.BLOCK_SIZE * 20 
+                                          : Lucene50PostingsFormat.BLOCK_SIZE * 3;
   
   // creates 8 fields with different options and does "duels" of fields against each other
   public void test() throws Exception {
@@ -90,7 +91,7 @@ public class TestBlockPostingsFormat3 extends LuceneTestCase {
     FieldType docsOnlyType = new FieldType(TextField.TYPE_NOT_STORED);
     // turn this on for a cross-check
     docsOnlyType.setStoreTermVectors(true);
-    docsOnlyType.setIndexOptions(IndexOptions.DOCS_ONLY);
+    docsOnlyType.setIndexOptions(IndexOptions.DOCS);
     
     FieldType docsAndFreqsType = new FieldType(TextField.TYPE_NOT_STORED);
     // turn this on for a cross-check

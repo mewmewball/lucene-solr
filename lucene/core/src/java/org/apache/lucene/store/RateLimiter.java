@@ -93,7 +93,7 @@ public abstract class RateLimiter {
     
     /** Pauses, if necessary, to keep the instantaneous IO
      *  rate at or below the target.  Be sure to only call
-     *  this method when bytes > {@link #getMinPauseCheckBytes},
+     *  this method when bytes &gt; {@link #getMinPauseCheckBytes},
      *  otherwise it will pause way too long!
      *
      *  @return the pause time in nano seconds */  
@@ -138,7 +138,17 @@ public abstract class RateLimiter {
             // NOTE: except maybe on real-time JVMs, minimum realistic sleep time
             // is 1 msec; if you pass just 1 nsec the default impl rounds
             // this up to 1 msec:
-            Thread.sleep((int) (pauseNS/1000000), (int) (pauseNS % 1000000));
+            int sleepNS;
+            int sleepMS;
+            if (pauseNS > 100000L * Integer.MAX_VALUE) {
+              // Not really practical (sleeping for 25 days) but we shouldn't overflow int:
+              sleepMS = Integer.MAX_VALUE;
+              sleepNS = 0;
+            } else {
+              sleepMS = (int) (pauseNS/1000000);
+              sleepNS = (int) (pauseNS % 1000000);
+            }
+            Thread.sleep(sleepMS, sleepNS);
           } catch (InterruptedException ie) {
             throw new ThreadInterruptedException(ie);
           }

@@ -29,8 +29,6 @@ import org.apache.lucene.codecs.NormsConsumer;
 import org.apache.lucene.codecs.NormsFormat;
 import org.apache.lucene.codecs.StoredFieldsWriter;
 import org.apache.lucene.document.FieldType;
-import org.apache.lucene.index.FieldInfo.DocValuesType;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.util.ArrayUtil;
@@ -85,7 +83,7 @@ final class DefaultIndexingChain extends DocConsumer {
   }
 
   @Override
-  public void flush(SegmentWriteState state) throws IOException {
+  public void flush(SegmentWriteState state) throws IOException, AbortingException {
 
     // NOTE: caller (DocumentsWriterPerThread) handles
     // aborting on any exception from this method
@@ -130,7 +128,7 @@ final class DefaultIndexingChain extends DocConsumer {
         PerField perField = fieldHash[i];
         while (perField != null) {
           if (perField.docValuesWriter != null) {
-            if (perField.fieldInfo.hasDocValues() == false) {
+            if (perField.fieldInfo.getDocValuesType() == DocValuesType.NONE) {
               // BUG
               throw new AssertionError("segment=" + state.segmentInfo + ": field=\"" + perField.fieldInfo.name + "\" has no docValues but wrote them");
             }
@@ -143,7 +141,7 @@ final class DefaultIndexingChain extends DocConsumer {
             perField.docValuesWriter.finish(docCount);
             perField.docValuesWriter.flush(state, dvConsumer);
             perField.docValuesWriter = null;
-          } else if (perField.fieldInfo.hasDocValues()) {
+          } else if (perField.fieldInfo.getDocValuesType() != DocValuesType.NONE) {
             // BUG
             throw new AssertionError("segment=" + state.segmentInfo + ": field=\"" + perField.fieldInfo.name + "\" has docValues but did not write them");
           }
@@ -178,7 +176,7 @@ final class DefaultIndexingChain extends DocConsumer {
   /** Catch up for all docs before us that had no stored
    *  fields, or hit non-aborting exceptions before writing
    *  stored fields. */
-  private void fillStoredFields(int docID) throws IOException {
+  private void fillStoredFields(int docID) throws IOException, AbortingException {
     while (lastStoredDocID < docID) {
       startStoredFields();
       finishStoredFields();
@@ -200,7 +198,7 @@ final class DefaultIndexingChain extends DocConsumer {
 
           // we must check the final value of omitNorms for the fieldinfo: it could have 
           // changed for this field since the first time we added it.
-          if (fi.omitsNorms() == false && fi.isIndexed()) {
+          if (fi.omitsNorms() == false && fi.getIndexOptions() != IndexOptions.NONE) {
             assert perField.norms != null: "field=" + fi.name;
             perField.norms.finish(state.segmentInfo.getDocCount());
             perField.norms.flush(state, normsConsumer);
@@ -219,11 +217,7 @@ final class DefaultIndexingChain extends DocConsumer {
 
   @Override
   public void abort() {
-    try {
-      // E.g. close any open files in the stored fields writer:
-      storedFieldsWriter.abort();
-    } catch (Throwable t) {
-    }
+    IOUtils.closeWhileHandlingException(storedFieldsWriter);
 
     try {
       // E.g. close any open files in the term vectors writer:
@@ -259,36 +253,28 @@ final class DefaultIndexingChain extends DocConsumer {
 
   /** Calls StoredFieldsWriter.startDocument, aborting the
    *  segment if it hits any exception. */
-  private void startStoredFields() throws IOException {
-    boolean success = false;
+  private void startStoredFields() throws IOException, AbortingException {
     try {
       initStoredFieldsWriter();
       storedFieldsWriter.startDocument();
-      success = true;
-    } finally {
-      if (success == false) {
-        docWriter.setAborting();        
-      }
+    } catch (Throwable th) {
+      throw new AbortingException(th);
     }
     lastStoredDocID++;
   }
 
   /** Calls StoredFieldsWriter.finishDocument, aborting the
    *  segment if it hits any exception. */
-  private void finishStoredFields() throws IOException {
-    boolean success = false;
+  private void finishStoredFields() throws IOException, AbortingException {
     try {
       storedFieldsWriter.finishDocument();
-      success = true;
-    } finally {
-      if (success == false) {
-        docWriter.setAborting();        
-      }
+    } catch (Throwable th) {
+      throw new AbortingException(th);
     }
   }
 
   @Override
-  public void processDocument() throws IOException {
+  public void processDocument() throws IOException, AbortingException {
 
     // How many indexed field names we've seen (collapses
     // multiple field instances by the same name):
@@ -331,16 +317,12 @@ final class DefaultIndexingChain extends DocConsumer {
       }
     }
 
-    boolean success = false;
     try {
       termsHash.finishDocument();
-      success = true;
-    } finally {
-      if (success == false) {
-        // Must abort, on the possibility that on-disk term
-        // vectors are now corrupt:
-        docWriter.setAborting();
-      }
+    } catch (Throwable th) {
+      // Must abort, on the possibility that on-disk term
+      // vectors are now corrupt:
+      throw new AbortingException(th);
     }
 
     // Add stored fields:
@@ -358,20 +340,24 @@ final class DefaultIndexingChain extends DocConsumer {
         
         PerField fp = getOrAddField(fieldName, fieldType, false);
         if (fieldType.stored()) {
-          abort = true;
-          storedFieldsWriter.writeField(fp.fieldInfo, field);
-          abort = false;
+          try {
+            storedFieldsWriter.writeField(fp.fieldInfo, field);
+          } catch (Throwable th) {
+            abort = true;
+            throw new AbortingException(th);
+          }
         }
 
-        DocValuesType dvType = fieldType.docValueType();
-        if (dvType != null) {
+        DocValuesType dvType = fieldType.docValuesType();
+        if (dvType == null) {
+          throw new NullPointerException("docValuesType cannot be null (field: \"" + fieldName + "\")");
+        }
+        if (dvType != DocValuesType.NONE) {
           indexDocValue(fp, dvType, field);
         }
       }
     } finally {
-      if (abort) {
-        docWriter.setAborting();
-      } else {
+      if (abort == false) {
         finishStoredFields();
       }
     }
@@ -379,6 +365,9 @@ final class DefaultIndexingChain extends DocConsumer {
 
   private static void verifyFieldType(String name, IndexableFieldType ft) {
     if (ft.indexOptions() == null) {
+      throw new NullPointerException("IndexOptions must not be null (field: \"" + name + "\")");
+    }
+    if (ft.indexOptions() == IndexOptions.NONE) {
       if (ft.storeTermVectors()) {
         throw new IllegalArgumentException("cannot store term vectors "
                                            + "for a field that is not indexed (field=\"" + name + "\")");
@@ -402,9 +391,7 @@ final class DefaultIndexingChain extends DocConsumer {
    *  value */
   private void indexDocValue(PerField fp, DocValuesType dvType, StorableField field) throws IOException {
 
-    boolean hasDocValues = fp.fieldInfo.hasDocValues();
-
-    if (hasDocValues == false) {
+    if (fp.fieldInfo.getDocValuesType() == DocValuesType.NONE) {
       // This will throw an exc if the caller tried to
       // change the DV type for the field:
       fieldInfos.globalFieldNumbers.setDocValuesType(fp.fieldInfo.number, fp.fieldInfo.name, dvType);
@@ -482,7 +469,11 @@ final class DefaultIndexingChain extends DocConsumer {
     if (fp == null) {
       // First time we are seeing this field in this segment
 
-      FieldInfo fi = fieldInfos.addOrUpdate(name, fieldType);
+      FieldInfo fi = fieldInfos.getOrAdd(name);
+      // Messy: must set this here because e.g. FreqProxTermsWriterPerField looks at the initial
+      // IndexOptions to decide what arrays it must create).  Then, we also must set it in
+      // PerField.invert to allow for later downgrading of the index options:
+      fi.setIndexOptions(fieldType.indexOptions());
       
       fp = new PerField(fi, invert);
       fp.next = fieldHash[hashPos];
@@ -500,12 +491,12 @@ final class DefaultIndexingChain extends DocConsumer {
         fields = newFields;
       }
 
-    } else {
-      fp.fieldInfo.update(fieldType);
-
-      if (invert && fp.invertState == null) {
-        fp.setInvertState();
-      }
+    } else if (invert && fp.invertState == null) {
+      // Messy: must set this here because e.g. FreqProxTermsWriterPerField looks at the initial
+      // IndexOptions to decide what arrays it must create).  Then, we also must set it in
+      // PerField.invert to allow for later downgrading of the index options:
+      fp.fieldInfo.setIndexOptions(fieldType.indexOptions());
+      fp.setInvertState();
     }
 
     return fp;
@@ -536,6 +527,8 @@ final class DefaultIndexingChain extends DocConsumer {
     
     // reused
     TokenStream tokenStream;
+
+    IndexOptions indexOptions;
 
     public PerField(FieldInfo fieldInfo, boolean invert) {
       this.fieldInfo = fieldInfo;
@@ -571,7 +564,7 @@ final class DefaultIndexingChain extends DocConsumer {
     /** Inverts one field for one document; first is true
      *  if this is the first time we are seeing this field
      *  name in this document. */
-    public void invert(IndexableField field, boolean first) throws IOException {
+    public void invert(IndexableField field, boolean first) throws IOException, AbortingException {
       if (first) {
         // First time we're seeing this field (indexed) in
         // this document:
@@ -580,18 +573,24 @@ final class DefaultIndexingChain extends DocConsumer {
 
       IndexableFieldType fieldType = field.fieldType();
 
+      IndexOptions indexOptions = fieldType.indexOptions();
+      fieldInfo.setIndexOptions(indexOptions);
+
+      if (fieldType.omitNorms()) {
+        fieldInfo.setOmitsNorms();
+      }
+
       final boolean analyzed = fieldType.tokenized() && docState.analyzer != null;
         
       // only bother checking offsets if something will consume them.
       // TODO: after we fix analyzers, also check if termVectorOffsets will be indexed.
-      final boolean checkOffsets = fieldType.indexOptions() == IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS;
+      final boolean checkOffsets = indexOptions == IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS;
 
       /*
        * To assist people in tracking down problems in analysis components, we wish to write the field name to the infostream
        * when we fail. We expect some caller to eventually deal with the real exception, so we don't want any 'catch' clauses,
        * but rather a finally that takes note of the problem.
        */
-      boolean aborting = false;
       boolean succeededInProcessingField = false;
       try (TokenStream stream = tokenStream = field.tokenStream(docState.analyzer, tokenStream)) {
         // reset the TokenStream to the first token
@@ -643,9 +642,21 @@ final class DefaultIndexingChain extends DocConsumer {
           // internal state of the terms hash is now
           // corrupt and should not be flushed to a
           // new segment:
-          aborting = true;
-          termsHashPerField.add();
-          aborting = false;
+          try {
+            termsHashPerField.add();
+          } catch (MaxBytesLengthExceededException e) {
+            byte[] prefix = new byte[30];
+            BytesRef bigTerm = invertState.termAttribute.getBytesRef();
+            System.arraycopy(bigTerm.bytes, bigTerm.offset, prefix, 0, 30);
+            String msg = "Document contains at least one immense term in field=\"" + fieldInfo.name + "\" (whose UTF8 encoding is longer than the max length " + DocumentsWriterPerThread.MAX_TERM_LENGTH_UTF8 + "), all of which were skipped.  Please correct the analyzer to not produce such terms.  The prefix of the first immense term is: '" + Arrays.toString(prefix) + "...', original message: " + e.getMessage();
+            if (docState.infoStream.isEnabled("IW")) {
+              docState.infoStream.message("IW", "ERROR: " + msg);
+            }
+            // Document will be deleted above:
+            throw new IllegalArgumentException(msg, e);
+          } catch (Throwable th) {
+            throw new AbortingException(th);
+          }
         }
 
         // trigger streams to perform end-of-stream operations
@@ -658,22 +669,7 @@ final class DefaultIndexingChain extends DocConsumer {
 
         /* if there is an exception coming through, we won't set this to true here:*/
         succeededInProcessingField = true;
-      } catch (MaxBytesLengthExceededException e) {
-        aborting = false;
-        byte[] prefix = new byte[30];
-        BytesRef bigTerm = invertState.termAttribute.getBytesRef();
-        System.arraycopy(bigTerm.bytes, bigTerm.offset, prefix, 0, 30);
-        String msg = "Document contains at least one immense term in field=\"" + fieldInfo.name + "\" (whose UTF8 encoding is longer than the max length " + DocumentsWriterPerThread.MAX_TERM_LENGTH_UTF8 + "), all of which were skipped.  Please correct the analyzer to not produce such terms.  The prefix of the first immense term is: '" + Arrays.toString(prefix) + "...', original message: " + e.getMessage();
-        if (docState.infoStream.isEnabled("IW")) {
-          docState.infoStream.message("IW", "ERROR: " + msg);
-        }
-        // Document will be deleted above:
-        throw new IllegalArgumentException(msg, e);
       } finally {
-        if (succeededInProcessingField == false && aborting) {
-          docState.docWriter.setAborting();
-        }
-
         if (!succeededInProcessingField && docState.infoStream.isEnabled("DW")) {
           docState.infoStream.message("DW", "An exception was thrown while processing field " + fieldInfo.name);
         }
